@@ -1,0 +1,35 @@
+name: Build
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  shared-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose run --rm builder :shared:desktopTest
+
+  desktop-and-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose run --rm builder :desktopApp:packageDistributionForCurrentOS
+      - run: docker compose run --rm builder :webApp:wasmJsProductionExecutableCompileSync
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose run --rm android-builder
+
+  security-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sh docker/security-audit.sh
+      - uses: actions/dependency-review-action@v4
+        if: github.event_name == 'pull_request'
+      - run: docker compose run --rm builder :shared:dependencies

@@ -1,0 +1,22 @@
+{
+  "targets": [
+    {
+      "name": "silo-a",
+      "endpoint": "http://localhost:9000",
+      "bucket": "hdpwd-s3-a",
+      "region": "us-east-1"
+    },
+    {
+      "name": "silo-b",
+      "endpoint": "http://localhost:9000",
+      "bucket": "hdpwd-s3-b",
+      "region": "us-east-1"
+    },
+    {
+      "name": "silo-c",
+      "endpoint": "http://localhost:9000",
+      "bucket": "hdpwd-s3-c",
+      "region": "us-east-1"
+    }
+  ]
+}

@@ -1,0 +1,76 @@
+services:
+  builder:
+    build:
+      context: .
+      dockerfile: docker/build.Dockerfile
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+      - gradle-cache:/home/gradle/.gradle
+    environment:
+      HTTP_PROXY: ${DOCKER_BUILD_HTTP_PROXY:-http://http.docker.internal:3128}
+      HTTPS_PROXY: ${DOCKER_BUILD_HTTPS_PROXY:-http://http.docker.internal:3128}
+      NO_PROXY: ${DOCKER_BUILD_NO_PROXY:-localhost,127.0.0.1,silo}
+      GRADLE_OPTS: ${DOCKER_BUILD_GRADLE_OPTS:--Dhttp.proxyHost=http.docker.internal -Dhttp.proxyPort=3128 -Dhttps.proxyHost=http.docker.internal -Dhttps.proxyPort=3128}
+    entrypoint: ["/usr/local/bin/build-project"]
+    command: [":shared:desktopTest"]
+
+  android-builder:
+    build:
+      context: .
+      dockerfile: docker/android-build.Dockerfile
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+      - gradle-cache:/root/.gradle
+    environment:
+      HTTP_PROXY: ${DOCKER_BUILD_HTTP_PROXY:-http://http.docker.internal:3128}
+      HTTPS_PROXY: ${DOCKER_BUILD_HTTPS_PROXY:-http://http.docker.internal:3128}
+      NO_PROXY: ${DOCKER_BUILD_NO_PROXY:-localhost,127.0.0.1,silo}
+      GRADLE_OPTS: ${DOCKER_BUILD_GRADLE_OPTS:--Dhttp.proxyHost=http.docker.internal -Dhttp.proxyPort=3128 -Dhttps.proxyHost=http.docker.internal -Dhttps.proxyPort=3128}
+    command: [":androidApp:assembleDebug"]
+
+  silo:
+    image: pgsty/silo:latest
+    environment:
+      MINIO_ROOT_USER: hdpwd-test
+      MINIO_ROOT_PASSWORD: hdpwd-test-password
+    command: ["server", "/data", "--console-address", ":9001"]
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - silo-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  s3-init:
+    image: minio/mc:latest
+    depends_on:
+      silo:
+        condition: service_healthy
+    environment:
+      S3_ACCESS_KEY: hdpwd-test
+      S3_SECRET_KEY: hdpwd-test-password
+    entrypoint: ["/bin/sh", "/init-buckets.sh"]
+    volumes:
+      - ./docker/s3/init-buckets.sh:/init-buckets.sh:ro
+
+  s3-smoke:
+    image: minio/mc:latest
+    depends_on:
+      s3-init:
+        condition: service_completed_successfully
+    environment:
+      S3_ACCESS_KEY: hdpwd-test
+      S3_SECRET_KEY: hdpwd-test-password
+    entrypoint: ["/bin/sh", "/smoke.sh"]
+    volumes:
+      - ./docker/s3/smoke.sh:/smoke.sh:ro
+
+volumes:
+  gradle-cache:
+  silo-data:
