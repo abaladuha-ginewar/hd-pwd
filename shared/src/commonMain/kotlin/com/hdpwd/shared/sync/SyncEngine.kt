@@ -41,14 +41,21 @@ class SyncScheduler(
 
     /**
      * 在最后一次本地修改后等待静默期再同步。
+     *
+     * @param quietPeriodMillis 覆盖默认静默期；传 0 表示立即同步。
      */
-    fun schedule(targets: List<SyncTarget>) {
+    fun schedule(
+        targets: List<SyncTarget>,
+        quietPeriodMillis: Long = this.quietPeriodMillis,
+    ) {
         generation++
         val scheduledGeneration = generation
         targets.filter { it.enabled && it.confirmed }.forEach { target ->
             jobs[target.id]?.cancel()
             jobs[target.id] = scope.launch {
-                delay(quietPeriodMillis)
+                if (quietPeriodMillis > 0) {
+                    delay(quietPeriodMillis)
+                }
                 if (scheduledGeneration == generation && localSaveCompleted()) {
                     sync(target)
                 }
@@ -60,6 +67,7 @@ class SyncScheduler(
      * 取消尚未开始的同步工作。
      */
     fun cancel() {
+        generation++
         jobs.values.forEach(Job::cancel)
         jobs.clear()
     }

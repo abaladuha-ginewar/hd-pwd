@@ -1,6 +1,7 @@
 package com.hdpwd.shared
 
 import com.hdpwd.shared.sync.S3CompatibilityMatrix
+import com.hdpwd.shared.sync.S3ProviderPreset
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -14,8 +15,11 @@ class S3CompatibilityMatrixTest {
      */
     @Test
     fun matrixCoversAllPresets() {
-        assertEquals(4, S3CompatibilityMatrix.profiles.size)
+        assertEquals(S3ProviderPreset.entries.size, S3CompatibilityMatrix.profiles.size)
         assertTrue(S3CompatibilityMatrix.profiles.all { it.signatureVersion == "AWS4-HMAC-SHA256" })
         assertTrue(S3CompatibilityMatrix.profiles.all { it.requiresCors })
+        assertTrue(
+            S3CompatibilityMatrix.profiles.any { it.preset == S3ProviderPreset.ALIYUN && !it.supportsPathStyle },
+        )
     }
 }

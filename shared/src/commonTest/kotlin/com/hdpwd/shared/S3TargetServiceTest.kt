@@ -23,6 +23,9 @@ class S3TargetServiceTest {
         val invalid = target("invalid", "http://remote.example")
         assertFails { service.add(emptyList(), invalid) }
         val local = service.add(emptyList(), target("local", "http://localhost:9000")).single()
+        assertEquals(true, local.confirmed)
+        assertEquals(true, local.enabled)
+        assertEquals(SyncStatus.PENDING, local.status)
         val failed = service.testConnection(local, FailingS3Store())
         assertEquals(SyncStatus.FAILED, failed.status)
     }
@@ -33,6 +36,9 @@ class S3TargetServiceTest {
         endpoint = endpoint,
         bucket = "hdpwd-test",
         region = "us-east-1",
+        accessKeyId = "AKIAEXAMPLEKEY",
+        encryptedCredentialsHex = "00ff",
+        credentialsSaltHex = "1122",
     )
 }
 

@@ -67,6 +67,7 @@ class VaultEditor {
             "当前用户下 key 已存在"
         }
         require(entry.policy.validationError() == null) { entry.policy.validationError() ?: "规则无效" }
+        require(ColorRules.isValidHex(entry.colorHex)) { "颜色格式无效" }
         return vault.copy(entries = vault.entries.map { if (it.id == entry.id) entry else it })
     }
 

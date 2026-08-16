@@ -15,14 +15,30 @@ class S3TargetService {
         current: List<SyncTarget>,
         target: SyncTarget,
     ): List<SyncTarget> {
-        require(target.endpoint.startsWith("https://") || target.endpoint.startsWith("http://localhost")) {
-            "生产 S3 端点必须使用 TLS"
+        val normalized = normalize(target)
+        require(
+            normalized.endpoint.startsWith("https://") ||
+                normalized.endpoint.startsWith("http://localhost") ||
+                normalized.endpoint.startsWith("http://127.0.0.1"),
+        ) {
+            "端点地址必须以 https:// 开头（本机调试可用 http://localhost）"
         }
-        require(target.bucket.matches(Regex("[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]"))) {
-            "S3 bucket 名称无效"
+        require(normalized.bucket.matches(Regex("[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]"))) {
+            "Bucket 名称无效：需为 3–63 位小写字母、数字、点或短横线"
         }
-        require(current.none { it.id == target.id }) { "S3 配置标识已存在" }
-        return current + target.copy(enabled = false, confirmed = false, status = SyncStatus.IDLE)
+        require(normalized.region.isNotBlank()) { "区域不能为空" }
+        require(normalized.accessKeyId.isNotBlank()) { "请填写 Access Key" }
+        require(normalized.encryptedCredentialsHex.isNotBlank() && normalized.credentialsSaltHex.isNotBlank()) {
+            "请填写 Secret Access Key"
+        }
+        require(current.none { it.id == normalized.id }) { "该同步目标已存在" }
+        // 本机手动添加视为用户已确认；从备份导入的目标仍走待确认流程
+        return current + normalized.copy(
+            enabled = true,
+            confirmed = true,
+            status = SyncStatus.PENDING,
+            lastErrorCode = null,
+        )
     }
 
     /**
@@ -32,9 +48,14 @@ class S3TargetService {
         current: List<SyncTarget>,
         target: SyncTarget,
     ): List<SyncTarget> {
-        require(current.any { it.id == target.id }) { "S3 配置不存在" }
+        val normalized = normalize(target)
+        require(current.any { it.id == normalized.id }) { "同步目标不存在" }
         return current.map {
-            if (it.id == target.id) target.copy(enabled = false, confirmed = false) else it
+            if (it.id == normalized.id) {
+                normalized.copy(enabled = false, confirmed = false, status = SyncStatus.IDLE)
+            } else {
+                it
+            }
         }
     }
 
@@ -49,12 +70,27 @@ class S3TargetService {
      */
     suspend fun testConnection(target: SyncTarget, store: S3ObjectStore): SyncTarget =
         try {
-            store.list("")
+            val prefix = target.objectPrefix.trim().trim('/').let { if (it.isEmpty()) "" else "$it/" }
+            store.list(prefix)
             target.copy(status = SyncStatus.SUCCESS, lastErrorCode = null)
         } catch (failure: Throwable) {
             target.copy(
                 status = SyncStatus.FAILED,
-                lastErrorCode = failure::class.simpleName?.take(64) ?: "connection-failed",
+                lastErrorCode = failure.message?.take(64)
+                    ?: failure::class.simpleName?.take(64)
+                    ?: "connection-failed",
             )
         }
+
+    private fun normalize(target: SyncTarget): SyncTarget =
+        target.copy(
+            endpoint = target.endpoint.trim().trimEnd('/'),
+            bucket = target.bucket.trim(),
+            region = target.region.trim(),
+            objectPrefix = normalizeObjectPrefix(target.objectPrefix),
+            provider = target.provider.trim().ifBlank { S3ProviderPreset.CUSTOM.providerCode },
+            accessKeyId = target.accessKeyId.trim(),
+            encryptedCredentialsHex = target.encryptedCredentialsHex.trim().lowercase(),
+            credentialsSaltHex = target.credentialsSaltHex.trim().lowercase(),
+        )
 }

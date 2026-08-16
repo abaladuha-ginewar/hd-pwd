@@ -19,5 +19,12 @@ class S3ProtocolTest {
         assertTrue(path.endsWith("/4.dat"))
         assertFalse(path.contains("GitHub"))
         assertFalse(path.contains("title"))
+        val prefixed = S3ObjectPaths.delta(
+            EntityId("vault-id"),
+            EntityId("device-id"),
+            4,
+            objectPrefix = "hd-pwd/phone",
+        )
+        assertTrue(prefixed.startsWith("hd-pwd/phone/vault/"))
     }
 }

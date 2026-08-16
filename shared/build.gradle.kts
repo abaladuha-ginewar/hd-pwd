@@ -28,6 +28,7 @@ kotlin {
             implementation(libs.compose.foundation)
             implementation(libs.compose.material3)
             implementation(libs.compose.ui)
+            implementation(compose.materialIconsExtended)
         }
         commonTest.dependencies {
             implementation(kotlin("test"))
@@ -37,12 +38,15 @@ kotlin {
         androidMain.dependencies {
             implementation(libs.diglol.crypto)
             implementation(libs.androidx.biometric)
+            implementation(libs.ktor.client.okhttp)
         }
         named("desktopMain").dependencies {
             implementation(libs.diglol.crypto)
+            implementation(libs.ktor.client.cio)
         }
         wasmJsMain.dependencies {
             implementation(npm("libsodium-wrappers-sumo", "0.8.4"))
+            implementation(libs.ktor.client.js)
         }
     }
 }

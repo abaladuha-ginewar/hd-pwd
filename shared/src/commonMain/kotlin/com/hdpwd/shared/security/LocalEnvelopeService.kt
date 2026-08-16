@@ -71,6 +71,8 @@ class LocalEnvelopeService(
         val localKey = deriveLocalKey(localPassword, header.saltHex.hexToByteArray())
         return try {
             LocalEnvelopeKey(container.open(localKey, record.wrappedLocalEnvelopeKey))
+        } catch (failure: Throwable) {
+            throw IllegalArgumentException("本机主密码错误", failure)
         } finally {
             localKey.fill(0)
         }

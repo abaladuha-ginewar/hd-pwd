@@ -112,6 +112,13 @@ data class SyncTarget(
     val confirmed: Boolean = false,
     val status: SyncStatus = SyncStatus.IDLE,
     val lastErrorCode: String? = null,
+    val objectPrefix: String = "",
+    /** Access Key Id（非 Secret，可展示）。 */
+    val accessKeyId: String = "",
+    /** 使用 SyncKey 封装后的凭据载荷（十六进制）。 */
+    val encryptedCredentialsHex: String = "",
+    /** 派生 SyncKey 时使用的盐（十六进制）。 */
+    val credentialsSaltHex: String = "",
 )
 
 /**

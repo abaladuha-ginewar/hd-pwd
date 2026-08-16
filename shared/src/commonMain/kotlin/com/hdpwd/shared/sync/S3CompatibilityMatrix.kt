@@ -15,12 +15,16 @@ data class S3CompatibilityProfile(
  */
 object S3CompatibilityMatrix {
     /**
-     * 返回通用 S3 及国内厂商的最小测试矩阵。
+     * 返回通用/自定义及国内外主流厂商的测试矩阵。
      */
-    val profiles: List<S3CompatibilityProfile> = listOf(
-        S3CompatibilityProfile(S3ProviderPreset.GENERIC, true, true),
-        S3CompatibilityProfile(S3ProviderPreset.ALIYUN, false, true),
-        S3CompatibilityProfile(S3ProviderPreset.TENCENT, true, true),
-        S3CompatibilityProfile(S3ProviderPreset.QINIU, true, true),
-    )
+    val profiles: List<S3CompatibilityProfile> = S3ProviderPreset.entries.map { preset ->
+        S3CompatibilityProfile(
+            preset = preset,
+            supportsPathStyle = when (preset) {
+                S3ProviderPreset.ALIYUN -> false
+                else -> true
+            },
+            requiresCors = true,
+        )
+    }
 }

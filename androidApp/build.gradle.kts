@@ -14,6 +14,7 @@ kotlin {
 dependencies {
     implementation(project(":shared"))
     implementation("androidx.activity:activity-compose:1.10.1")
+    implementation("androidx.fragment:fragment-ktx:1.8.6")
 }
 
 android {
@@ -36,5 +37,28 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
+    buildTypes {
+        getByName("debug") {
+            signingConfig = signingConfigs.getByName("debug")
+        }
+    }
+
+    // 最终 APK 文件名：hd-pwd-debug.apk / hd-pwd-release.apk
+    applicationVariants.configureEach {
+        outputs.configureEach {
+            val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
+            output.outputFileName = "hd-pwd-${buildType.name}.apk"
+        }
     }
 }

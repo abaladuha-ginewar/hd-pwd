@@ -25,6 +25,16 @@ class S3CredentialVaultTest {
         assertEquals("access", restored.accessKeyId)
         restored.useSecret { assertEquals("secret", it.decodeToString()) }
         restored.clear()
+
+        val sealed = vault.sealWithRecoveryPassword("recovery", S3Credentials("ak", "sk".encodeToByteArray()))
+        val opened = vault.openWithRecoveryPassword(
+            "recovery",
+            sealed.encryptedCredentialsHex,
+            sealed.credentialsSaltHex,
+        )
+        assertEquals("ak", opened.accessKeyId)
+        opened.useSecret { assertEquals("sk", it.decodeToString()) }
+        opened.clear()
     }
 }
 

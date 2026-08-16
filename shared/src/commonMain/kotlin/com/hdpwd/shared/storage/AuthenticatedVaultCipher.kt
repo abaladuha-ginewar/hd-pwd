@@ -46,7 +46,11 @@ class AuthenticatedVaultCipher(
         val header: ContainerHeader = container.readHeader(encrypted)
         val dataKey = deriveDataKey(recoveryPassword, header.saltHex.hexToByteArray())
         return try {
-            val payload = container.open(dataKey, encrypted)
+            val payload = try {
+                container.open(dataKey, encrypted)
+            } catch (failure: Throwable) {
+                throw IllegalArgumentException("恢复密码错误，或备份/密码库数据已损坏", failure)
+            }
             vaultJson.decodeFromString(payload.decodeToString())
         } finally {
             dataKey.fill(0)
