@@ -43,6 +43,8 @@ kotlin {
         named("desktopMain").dependencies {
             implementation(libs.diglol.crypto)
             implementation(libs.ktor.client.cio)
+            implementation(libs.jna)
+            implementation(libs.jna.platform)
         }
         wasmJsMain.dependencies {
             implementation(npm("libsodium-wrappers-sumo", "0.8.4"))

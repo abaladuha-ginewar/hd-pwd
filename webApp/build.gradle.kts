@@ -18,6 +18,7 @@ kotlin {
             implementation(project(":shared"))
             implementation(compose.runtime)
             implementation(compose.ui)
+            implementation(libs.coroutines.core)
         }
         wasmJsMain.dependencies {
             implementation(npm("libsodium-wrappers-sumo", "0.8.4"))

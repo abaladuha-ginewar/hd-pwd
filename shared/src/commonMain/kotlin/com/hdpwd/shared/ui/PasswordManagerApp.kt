@@ -121,6 +121,7 @@ fun PasswordManagerApp(
     repository: LocalAppRepository? = null,
     biometric: BiometricProvider = UnavailableBiometricProvider,
     backupFiles: BackupFilePort = UnsupportedBackupFilePort,
+    onPendingChangesChanged: (Boolean) -> Unit = {},
 ) {
     MaterialTheme {
         var screen by remember { mutableStateOf(AppScreen.USERS) }
@@ -265,9 +266,15 @@ fun PasswordManagerApp(
                             screen = AppScreen.USERS
                         }
                     },
+                    onAuthExpired = {
+                        session.clear()
+                        screen = AppScreen.UNLOCK
+                    },
+                    onPendingChangesChanged = onPendingChangesChanged,
                     onBack = {
                         session.clear()
                         selectedUser = null
+                        onPendingChangesChanged(false)
                         screen = AppScreen.USERS
                     },
                 )
@@ -301,7 +308,7 @@ private fun UserListScreen(
     SafeScreen(
         floatingActionButton = {
             FloatingActionButton(onClick = onCreate) {
-                Icon(Icons.Filled.PersonAdd, contentDescription = "创建用户")
+                Icon(Icons.Filled.PersonAdd, contentDescription = "创建或导入用户")
             }
         },
     ) { padding ->
@@ -310,9 +317,10 @@ private fun UserListScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text("hd-pwd", style = MaterialTheme.typography.headlineMedium)
+            Text("本地用户", style = MaterialTheme.typography.titleMedium)
             Text("选择用户以验证并进入密码库")
             if (users.isEmpty()) {
-                Text("当前设备还没有用户")
+                Text("当前设备还没有用户，点击右下角创建或导入")
             } else {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(users, key = { "${it.id.value}:${it.name}" }) { user ->
@@ -360,7 +368,7 @@ private fun CreateUserScreen(
             modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            EditorTopBar(title = "创建用户", onClose = onCancel)
+            EditorTopBar(title = "创建 / 导入用户", onClose = onCancel)
             OutlinedTextField(
                 name,
                 { name = it },
@@ -486,7 +494,7 @@ private fun CreateUserScreen(
                         }
                     }
                 }) {
-                    Text("创建")
+                    Text(if (importBytes != null) "创建并导入" else "创建")
                 }
             }
         }
@@ -596,6 +604,8 @@ private fun VaultScreen(
     backupFiles: BackupFilePort,
     onVaultChanged: (VaultState) -> Unit,
     onUserDeleted: () -> Unit,
+    onAuthExpired: () -> Unit,
+    onPendingChangesChanged: (Boolean) -> Unit = {},
     onBack: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -779,6 +789,10 @@ private fun VaultScreen(
                     it.status == SyncStatus.PENDING ||
                     it.status == SyncStatus.FAILED)
         }
+    }
+
+    LaunchedEffect(vault, syncBridge.localSaveReady) {
+        onPendingChangesChanged(needsExitSyncPrompt() || !syncBridge.localSaveReady)
     }
 
     fun requestLeaveVault() {
@@ -1026,8 +1040,8 @@ private fun VaultScreen(
             confirmButton = {
                 TextButton(onClick = {
                     authMessage = null
-                    onBack()
-                }) { Text("返回验证") }
+                    onAuthExpired()
+                }) { Text("重新验证") }
             },
             dismissButton = {
                 TextButton(onClick = { authMessage = null }) { Text("关闭") }

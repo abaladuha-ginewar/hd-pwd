@@ -1,6 +1,7 @@
 package com.hdpwd.shared
 
 import com.hdpwd.shared.crypto.PasswordGenerator
+import com.hdpwd.shared.crypto.V1PasswordVectors
 import com.hdpwd.shared.domain.KeyRules
 import com.hdpwd.shared.domain.PasswordPolicy
 import kotlin.test.Test
@@ -95,16 +96,33 @@ class PasswordGeneratorTest {
 
     /**
      * V1 固定向量锁定协议输入、HMAC 流和最终输出。
+     * 该断言必须在 Android / Desktop / Web 的测试目标中保持一致。
      */
     @Test
     fun v1KnownAnswerVector() {
         assertEquals(
-            "8ff-m+yMY^Ib_Cnt@7X_",
+            V1PasswordVectors.EXPECTED_PASSWORD,
             PasswordGenerator.generate(
-                "correct horse battery staple",
-                "GitHub.Work",
+                V1PasswordVectors.RECOVERY,
+                V1PasswordVectors.KEY,
                 PasswordPolicy(),
             ),
         )
+    }
+
+    /**
+     * 升级后不得改变已冻结 V1 输出；重复调用与向量必须逐字节相同。
+     */
+    @Test
+    fun v1RemainsStableAcrossRepeatedCalls() {
+        val policy = PasswordPolicy()
+        val samples = List(5) {
+            PasswordGenerator.generate(
+                V1PasswordVectors.RECOVERY,
+                V1PasswordVectors.KEY,
+                policy,
+            )
+        }
+        assertTrue(samples.all { it == V1PasswordVectors.EXPECTED_PASSWORD })
     }
 }

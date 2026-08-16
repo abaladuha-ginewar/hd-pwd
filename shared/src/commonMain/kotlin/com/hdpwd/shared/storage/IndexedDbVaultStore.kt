@@ -22,6 +22,8 @@ interface IndexedDbPort {
 
 /**
  * 将 IndexedDB 端口适配为 VaultStore。
+ *
+ * Web 生产路径优先使用 localStorage 原子字节存储（IndexedDB 在 Kotlin/Wasm 上兼容性较差）。
  */
 class IndexedDbVaultStore(
     private val database: IndexedDbPort,

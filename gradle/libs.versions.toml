@@ -8,6 +8,7 @@ ktor = "3.1.1"
 datetime = "0.6.1"
 diglolCrypto = "0.2.0"
 biometric = "1.1.0"
+jna = "5.14.0"
 androidCompileSdk = "35"
 androidMinSdk = "26"
 
@@ -28,6 +29,8 @@ ktor-client-js = { module = "io.ktor:ktor-client-js", version.ref = "ktor" }
 datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "datetime" }
 diglol-crypto = { module = "com.diglol.crypto:crypto", version.ref = "diglolCrypto" }
 androidx-biometric = { module = "androidx.biometric:biometric", version.ref = "biometric" }
+jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
+jna-platform = { module = "net.java.dev.jna:jna-platform", version.ref = "jna" }
 
 [plugins]
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }

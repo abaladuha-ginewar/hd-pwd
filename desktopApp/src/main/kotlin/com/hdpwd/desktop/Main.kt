@@ -6,7 +6,7 @@ import androidx.compose.ui.window.application
 import com.hdpwd.shared.crypto.platformCryptoProvider
 import com.hdpwd.shared.security.DesktopBackupFilePort
 import com.hdpwd.shared.security.DesktopClipboardPort
-import com.hdpwd.shared.security.UnavailableBiometricProvider
+import com.hdpwd.shared.security.DesktopWindowsDpapiProvider
 import com.hdpwd.shared.storage.DesktopAtomicByteStore
 import com.hdpwd.shared.storage.LocalAppRepository
 import com.hdpwd.shared.ui.PasswordManagerApp
@@ -29,7 +29,7 @@ fun main() = application {
         PasswordManagerApp(
             clipboard = DesktopClipboardPort(),
             repository = repository,
-            biometric = UnavailableBiometricProvider,
+            biometric = DesktopWindowsDpapiProvider(),
             backupFiles = DesktopBackupFilePort(),
         )
     }

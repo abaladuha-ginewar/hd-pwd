@@ -23,11 +23,11 @@
 - **THEN** 系统停止读取并提示升级或不兼容
 
 ### Requirement: 平台本地存储
-系统 SHALL 在 Android 和 Windows 使用应用私有本地文件保存用户密码库，并在 Web 使用 IndexedDB 保存加密 Blob、索引元数据和同步状态。Vault 文件名和对象键 MUST 使用随机标识，不得使用用户名、密码项 key、标题或标签。
+系统 SHALL 在 Android 和 Windows 使用应用私有本地文件保存用户密码库，并在 Web 使用浏览器本地持久化（优先 localStorage；IndexedDB 在运行时不兼容时可替换为等价本地缓存）保存加密 Blob、索引元数据和同步状态。Vault 文件名和对象键 MUST 使用随机标识，不得使用用户名、密码项 key、标题或标签。
 
 #### Scenario: Web 持久化
 - **WHEN** Web 用户修改密码库
-- **THEN** 系统将认证加密后的新状态事务化写入 IndexedDB
+- **THEN** 系统将认证加密后的新状态写入浏览器本地持久化存储
 
 #### Scenario: 本地文件持久化
 - **WHEN** Android 或 Windows 用户修改密码库
