@@ -77,6 +77,8 @@ class PasswordGeneratorTest {
     @Test
     fun keyValidation() {
         assertTrue(KeyRules.isValid("A_.-z"))
+        assertTrue(KeyRules.isValid("Site1"))
+        assertTrue(KeyRules.isValid("user_2024"))
         assertTrue(KeyRules.validate("with space") != null)
         assertTrue(KeyRules.validate("中文") != null)
     }

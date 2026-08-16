@@ -2,6 +2,7 @@ package com.hdpwd.shared
 
 import com.hdpwd.shared.domain.EntityId
 import com.hdpwd.shared.domain.EditDraft
+import com.hdpwd.shared.domain.MutationStamp
 import com.hdpwd.shared.domain.PasswordEntry
 import com.hdpwd.shared.domain.VaultEditor
 import com.hdpwd.shared.domain.VaultQueries
@@ -106,5 +107,29 @@ class VaultEditorTest {
         val draft = EditDraft("original").update("changed")
         assertEquals("original", draft.cancel())
         assertEquals("changed", draft.commit())
+    }
+
+    /**
+     * 每次增删改应写入时间戳 + 递增序号组成的修改戳。
+     */
+    @Test
+    fun mutationsCarryTimestampAndRevision() {
+        var clock = 1000L
+        val editor = VaultEditor { clock }
+        val created = editor.addEntry(
+            VaultState(EntityId("vault")),
+            PasswordEntry(EntityId("e1"), null, "KeyOne", "标题"),
+        )
+        assertEquals(1, created.deviceSequence)
+        assertEquals(MutationStamp(1000, 1), created.entries.single().mutation)
+
+        clock = 2000L
+        val updated = editor.updateEntry(
+            created,
+            created.entries.single().copy(key = "KeyTwo", title = "新标题"),
+        )
+        assertEquals(2, updated.deviceSequence)
+        assertEquals(MutationStamp(2000, 2), updated.entries.single().mutation)
+        assertEquals("KeyTwo", updated.entries.single().key)
     }
 }

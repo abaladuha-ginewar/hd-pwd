@@ -100,6 +100,12 @@ enum class S3ProviderPreset(
         defaultRegion = "nyc3",
         regionHint = "如 nyc3、sfo3、sgp1、fra1",
     ),
+    CSTCLOUD_CAPSULE(
+        displayName = "中科院数据胶囊",
+        providerCode = "cstcloud-capsule",
+        defaultRegion = "us-east-1",
+        regionHint = "固定填写 us-east-1",
+    ),
     MINIO(
         displayName = "MinIO / 自建",
         providerCode = "minio",
@@ -119,6 +125,18 @@ enum class S3ProviderPreset(
      */
     val requiresAccountId: Boolean
         get() = this == CLOUDFLARE
+
+    /**
+     * 是否强制 Path-Style（路径寻址）。
+     *
+     * 中科院数据胶囊、MinIO 等未启用 Virtual-Hosted DNS，必须为 true。
+     */
+    val forcePathStyle: Boolean
+        get() = when (this) {
+            ALIYUN -> false
+            CSTCLOUD_CAPSULE, MINIO, CUSTOM -> true
+            else -> true
+        }
 
     /**
      * 根据区域（及可选 Account ID）生成推荐 Endpoint；无法生成时返回空串。
@@ -143,6 +161,8 @@ enum class S3ProviderPreset(
             BACKBLAZE -> "https://s3.$r.backblazeb2.com"
             WASABI -> "https://s3.$r.wasabisys.com"
             DIGITALOCEAN -> "https://$r.digitaloceanspaces.com"
+            // 中国科技云数据胶囊：固定 Path-style 端点，区域占位 us-east-1
+            CSTCLOUD_CAPSULE -> "https://s3.cstcloud.cn"
         }
     }
 

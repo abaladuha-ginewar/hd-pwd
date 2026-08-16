@@ -4,14 +4,14 @@ package com.hdpwd.shared.domain
  * 密码项 key 的跨平台约束。
  */
 object KeyRules {
-    private val pattern = Regex("[A-Za-z_.-]+")
+    private val pattern = Regex("[A-Za-z0-9_.-]+")
 
     /**
      * 返回 key 的校验错误，合法时返回 null。
      */
     fun validate(key: String): String? = when {
         key.length !in 1..128 -> "key 长度必须为 1 至 128"
-        !pattern.matches(key) -> "key 只能包含 A-Z、a-z、下划线、点和连字符"
+        !pattern.matches(key) -> "key 只能包含字母、数字、下划线、点和连字符"
         else -> null
     }
 

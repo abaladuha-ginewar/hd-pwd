@@ -3,11 +3,12 @@ package com.hdpwd.shared
 import com.hdpwd.shared.domain.EntityId
 import com.hdpwd.shared.sync.S3ObjectPaths
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * 验证 S3 对象路径只使用随机身份和序号。
+ * 验证 S3 对象路径只使用随机身份和序号，且共享备份不嵌入 vaultId。
  */
 class S3ProtocolTest {
     /**
@@ -23,8 +24,20 @@ class S3ProtocolTest {
             EntityId("vault-id"),
             EntityId("device-id"),
             4,
-            objectPrefix = "hd-pwd/phone",
+            objectPrefix = "family-vault",
         )
-        assertTrue(prefixed.startsWith("hd-pwd/phone/vault/"))
+        assertEquals("family-vault/deltas/device-id/4.dat", prefixed)
+        assertFalse(prefixed.contains("vault-id"))
+    }
+
+    /**
+     * 共享密码库只落在用户配置目录下的固定文件名。
+     */
+    @Test
+    fun sharedVaultBlobUsesConfiguredDirectoryOnly() {
+        assertEquals("vault.dat", S3ObjectPaths.sharedVaultBlob(""))
+        assertEquals("family-vault/vault.dat", S3ObjectPaths.sharedVaultBlob("family-vault"))
+        assertEquals("a/b/vault.dat", S3ObjectPaths.sharedVaultBlob("/a/b/"))
+        assertFalse(S3ObjectPaths.sharedVaultBlob("family-vault").contains("shared"))
     }
 }

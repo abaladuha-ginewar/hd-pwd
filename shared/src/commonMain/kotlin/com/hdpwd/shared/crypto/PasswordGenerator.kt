@@ -24,7 +24,7 @@ object PasswordGenerator {
      */
     fun generate(recoveryPassword: CharSequence, key: String, policy: PasswordPolicy): String {
         require(policy.validationError() == null) { policy.validationError() ?: "密码规则无效" }
-        require(key.matches(Regex("[A-Za-z_.-]{1,128}"))) { "key 格式无效" }
+        require(key.matches(Regex("[A-Za-z0-9_.-]{1,128}"))) { "key 格式无效" }
         val stream = ByteStream(
             deriveGeneratorKey(recoveryPassword.toString(), key, policy),
             key.protocolBytes() + policy.canonical().protocolBytes(),
@@ -51,7 +51,7 @@ object PasswordGenerator {
      */
     fun recipe(key: String, policy: PasswordPolicy): RecoveryRecipe {
         require(policy.validationError() == null) { policy.validationError() ?: "密码规则无效" }
-        require(key.matches(Regex("[A-Za-z_.-]{1,128}"))) { "key 格式无效" }
+        require(key.matches(Regex("[A-Za-z0-9_.-]{1,128}"))) { "key 格式无效" }
         return RecoveryRecipe(VERSION, key, policy, checksum(key, policy))
     }
 

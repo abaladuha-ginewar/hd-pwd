@@ -1,9 +1,15 @@
 package com.hdpwd.shared.domain
 
+import kotlinx.datetime.Clock
+
 /**
  * 纯领域层密码库编辑器，所有调用均返回新的不可变 VaultState。
+ *
+ * 每次增删改都会写入 [MutationStamp]（时间戳 + 递增序号），供跨设备合并裁决。
  */
-class VaultEditor {
+class VaultEditor(
+    private val nowMillis: () -> Long = { Clock.System.now().toEpochMilliseconds() },
+) {
     /**
      * 创建文件夹并校验根目录起算的三级层级限制。
      */
@@ -24,8 +30,17 @@ class VaultEditor {
         require(vault.folders.none { it.parentId == parentId && it.name == name }) {
             "当前目录下文件夹名已存在"
         }
+        val (revision, mutation) = nextMutation(vault)
         return vault.copy(
-            folders = vault.folders + Folder(id, parentId, name, colorHex, parentDepth + 1),
+            folders = vault.folders + Folder(
+                id = id,
+                parentId = parentId,
+                name = name,
+                colorHex = colorHex,
+                depth = parentDepth + 1,
+                mutation = mutation,
+            ),
+            deviceSequence = revision,
         )
     }
 
@@ -40,7 +55,11 @@ class VaultEditor {
         require(vault.entries.none { it.key == entry.key }) { "当前用户下 key 已存在" }
         require(entry.policy.validationError() == null) { entry.policy.validationError() ?: "规则无效" }
         require(ColorRules.isValidHex(entry.colorHex)) { "颜色格式无效" }
-        return vault.copy(entries = vault.entries + entry)
+        val (revision, mutation) = nextMutation(vault)
+        return vault.copy(
+            entries = vault.entries + entry.copy(mutation = mutation),
+            deviceSequence = revision,
+        )
     }
 
     /**
@@ -54,7 +73,13 @@ class VaultEditor {
         require(vault.folders.none { it.id != folder.id && it.parentId == folder.parentId && it.name == folder.name }) {
             "当前目录下文件夹名已存在"
         }
-        return vault.copy(folders = vault.folders.map { if (it.id == folder.id) folder else it })
+        val (revision, mutation) = nextMutation(vault)
+        return vault.copy(
+            folders = vault.folders.map {
+                if (it.id == folder.id) folder.copy(mutation = mutation) else it
+            },
+            deviceSequence = revision,
+        )
     }
 
     /**
@@ -68,7 +93,13 @@ class VaultEditor {
         }
         require(entry.policy.validationError() == null) { entry.policy.validationError() ?: "规则无效" }
         require(ColorRules.isValidHex(entry.colorHex)) { "颜色格式无效" }
-        return vault.copy(entries = vault.entries.map { if (it.id == entry.id) entry else it })
+        val (revision, mutation) = nextMutation(vault)
+        return vault.copy(
+            entries = vault.entries.map {
+                if (it.id == entry.id) entry.copy(mutation = mutation) else it
+            },
+            deviceSequence = revision,
+        )
     }
 
     /**
@@ -81,9 +112,16 @@ class VaultEditor {
         transactionId: EntityId? = null,
     ): VaultState {
         require(vault.entries.any { it.id == entryId }) { "密码项不存在" }
+        val (revision, _) = nextMutation(vault)
         return vault.copy(
             entries = vault.entries.filterNot { it.id == entryId },
-            tombstones = vault.tombstones + Tombstone(entryId, timestamp, transactionId),
+            tombstones = vault.tombstones + Tombstone(
+                entityId = entryId,
+                deletedAt = timestamp,
+                transactionId = transactionId,
+                revision = revision,
+            ),
+            deviceSequence = revision,
         )
     }
 
@@ -93,9 +131,13 @@ class VaultEditor {
     fun moveEntry(vault: VaultState, entryId: EntityId, parentId: EntityId?): VaultState {
         require(vault.entries.any { it.id == entryId }) { "密码项不存在" }
         require(parentId == null || vault.folders.any { it.id == parentId }) { "目标目录不存在" }
-        return vault.copy(entries = vault.entries.map {
-            if (it.id == entryId) it.copy(parentId = parentId) else it
-        })
+        val (revision, mutation) = nextMutation(vault)
+        return vault.copy(
+            entries = vault.entries.map {
+                if (it.id == entryId) it.copy(parentId = parentId, mutation = mutation) else it
+            },
+            deviceSequence = revision,
+        )
     }
 
     /**
@@ -113,14 +155,20 @@ class VaultEditor {
         }
         val rootDepth = vault.folders.first { it.id == folderId }.depth
         val depthDelta = parentDepth + 1 - rootDepth
+        val (revision, mutation) = nextMutation(vault)
         return vault.copy(
             folders = vault.folders.map {
                 when {
-                    it.id == folderId -> it.copy(parentId = parentId, depth = it.depth + depthDelta)
-                    it.id in subtree -> it.copy(depth = it.depth + depthDelta)
+                    it.id == folderId -> it.copy(
+                        parentId = parentId,
+                        depth = it.depth + depthDelta,
+                        mutation = mutation,
+                    )
+                    it.id in subtree -> it.copy(depth = it.depth + depthDelta, mutation = mutation)
                     else -> it
                 }
             },
+            deviceSequence = revision,
         )
     }
 
@@ -131,13 +179,25 @@ class VaultEditor {
         val removedFolders = descendants(vault.folders, folderId) + folderId
         val removedEntries = vault.entries.filter { it.parentId in removedFolders }.map { it.id }
         val removedIds = removedFolders + removedEntries
+        val (revision, _) = nextMutation(vault)
         return vault.copy(
             folders = vault.folders.filterNot { it.id in removedFolders },
             entries = vault.entries.filterNot { it.id in removedEntries },
             tombstones = vault.tombstones + removedIds.map {
-                Tombstone(it, timestamp, transactionId)
+                Tombstone(
+                    entityId = it,
+                    deletedAt = timestamp,
+                    transactionId = transactionId,
+                    revision = revision,
+                )
             },
+            deviceSequence = revision,
         )
+    }
+
+    private fun nextMutation(vault: VaultState): Pair<Long, MutationStamp> {
+        val revision = vault.deviceSequence + 1
+        return revision to MutationStamp(updatedAt = nowMillis(), revision = revision)
     }
 
     private fun descendants(folders: List<Folder>, root: EntityId): Set<EntityId> {

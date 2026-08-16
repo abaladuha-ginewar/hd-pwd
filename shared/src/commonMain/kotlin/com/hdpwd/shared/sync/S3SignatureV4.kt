@@ -111,6 +111,11 @@ class S3SignatureV4Signer(
     }
 
     /**
+     * 按 Signature V4 规则编码查询串，供实际请求 URL 与签名使用同一字符串。
+     */
+    fun encodeQueryString(query: List<S3QueryParameter>): String = canonicalQuery(query)
+
+    /**
      * 为 GET、PUT 或 HEAD 请求生成 Authorization、日期和 payload hash 认证头。
      */
     fun sign(
@@ -145,8 +150,8 @@ class S3SignatureV4Signer(
         }
 
         return S3SignatureV4Result(
-            authorization = "AWS4-HMAC-SHA256 Credential=${credentials.accessKeyId}/$scope," +
-                "SignedHeaders=$signedHeaders,Signature=$signature",
+            authorization = "AWS4-HMAC-SHA256 Credential=${credentials.accessKeyId}/$scope, " +
+                "SignedHeaders=$signedHeaders, Signature=$signature",
             amzDate = request.amzDate,
             contentSha256 = payloadHash,
             signedHeaders = signedHeaders,

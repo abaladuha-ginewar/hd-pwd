@@ -81,6 +81,8 @@ data class Folder(
     val name: String,
     val colorHex: String,
     val depth: Int,
+    /** 最近一次增删改的修改戳，用于跨设备合并裁决。 */
+    val mutation: MutationStamp = MutationStamp(),
 )
 
 /**
@@ -96,7 +98,26 @@ data class PasswordEntry(
     val policy: PasswordPolicy = PasswordPolicy(),
     val generatorVersion: Int = 1,
     val colorHex: String = "#94A3B8",
+    /** 最近一次增删改的修改戳，用于跨设备合并裁决。 */
+    val mutation: MutationStamp = MutationStamp(),
 )
+
+/**
+ * 单次修改的唯一标识：墙钟时间戳 + 本机递增序号。
+ *
+ * 合并同 id 冲突时先比 [updatedAt]，再比 [revision]；二者都相等时由合并方优先保留本地。
+ */
+@Serializable
+data class MutationStamp(
+    val updatedAt: Long = 0L,
+    val revision: Long = 0L,
+) : Comparable<MutationStamp> {
+    override fun compareTo(other: MutationStamp): Int {
+        val byTime = updatedAt.compareTo(other.updatedAt)
+        if (byTime != 0) return byTime
+        return revision.compareTo(other.revision)
+    }
+}
 
 /**
  * S3 同步目标的非敏感配置和状态。
@@ -112,6 +133,10 @@ data class SyncTarget(
     val confirmed: Boolean = false,
     val status: SyncStatus = SyncStatus.IDLE,
     val lastErrorCode: String? = null,
+    /** 最近一次同步完成时间（epoch millis）；尚未同步成功时为 null。 */
+    val lastSyncAt: Long? = null,
+    /** 最近一次同步完成时的密码库版本号（deviceSequence）。 */
+    val lastSyncRevision: Long? = null,
     val objectPrefix: String = "",
     /** Access Key Id（非 Secret，可展示）。 */
     val accessKeyId: String = "",
@@ -141,7 +166,12 @@ data class Tombstone(
     val entityId: EntityId,
     val deletedAt: Long,
     val transactionId: EntityId? = null,
-)
+    /** 与 [deletedAt] 组成修改戳，用于和条目/文件夹版本比较。 */
+    val revision: Long = 0L,
+) {
+    val mutation: MutationStamp
+        get() = MutationStamp(updatedAt = deletedAt, revision = revision)
+}
 
 /**
  * 当前设备可见的同步冲突。
@@ -169,4 +199,23 @@ data class VaultState(
     val tombstones: List<Tombstone> = emptyList(),
     val conflicts: List<Conflict> = emptyList(),
     val deviceSequence: Long = 0,
-)
+) {
+    /**
+     * 业务内容的最新修改戳（条目 / 文件夹 / 墓碑），用于展示最后修改时间与版本。
+     */
+    fun latestContentMutation(): MutationStamp {
+        var best = MutationStamp()
+        folders.forEach { if (it.mutation > best) best = it.mutation }
+        entries.forEach { if (it.mutation > best) best = it.mutation }
+        tombstones.forEach { if (it.mutation > best) best = it.mutation }
+        if (best.revision == 0L && best.updatedAt == 0L && deviceSequence > 0L) {
+            return MutationStamp(updatedAt = 0L, revision = deviceSequence)
+        }
+        return best
+    }
+
+    /**
+     * 对外展示与同步对齐用的内容版本：库序号与最新修改戳 revision 取较大值。
+     */
+    fun contentVersion(): Long = maxOf(deviceSequence, latestContentMutation().revision)
+}

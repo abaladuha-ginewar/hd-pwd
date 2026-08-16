@@ -76,7 +76,7 @@ class S3TargetService {
         } catch (failure: Throwable) {
             target.copy(
                 status = SyncStatus.FAILED,
-                lastErrorCode = failure.message?.take(64)
+                lastErrorCode = failure.message?.take(180)
                     ?: failure::class.simpleName?.take(64)
                     ?: "connection-failed",
             )

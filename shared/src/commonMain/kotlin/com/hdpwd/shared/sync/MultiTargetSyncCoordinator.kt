@@ -36,7 +36,7 @@ class MultiTargetSyncCoordinator(
             try {
                 val deltaPrefix = S3ObjectPaths.joinPrefix(
                     target.target.objectPrefix,
-                    "vault/${vaultId.value}/deltas/",
+                    "deltas/",
                 )
                 target.store.list(deltaPrefix).forEach { path ->
                     val delta = decode(target.store.get(path))
@@ -82,7 +82,7 @@ class MultiTargetSyncCoordinator(
     ): Set<EntityId> {
         val deltaPrefix = S3ObjectPaths.joinPrefix(
             target.target.objectPrefix,
-            "vault/${vaultId.value}/deltas/",
+            "deltas/",
         )
         return target.store.list(deltaPrefix)
             .map { decode(target.store.get(it)) }

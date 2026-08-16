@@ -21,5 +21,11 @@ class S3CompatibilityMatrixTest {
         assertTrue(
             S3CompatibilityMatrix.profiles.any { it.preset == S3ProviderPreset.ALIYUN && !it.supportsPathStyle },
         )
+        assertTrue(
+            S3CompatibilityMatrix.profiles.any {
+                it.preset == S3ProviderPreset.CSTCLOUD_CAPSULE && it.supportsPathStyle
+            },
+        )
+        assertTrue(S3ProviderPreset.CSTCLOUD_CAPSULE.forcePathStyle)
     }
 }

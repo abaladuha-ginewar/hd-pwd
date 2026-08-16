@@ -1,6 +1,7 @@
 package com.hdpwd.shared.sync
 
 import com.hdpwd.shared.domain.EntityId
+import com.hdpwd.shared.domain.SyncStatus
 import com.hdpwd.shared.domain.SyncTarget
 import com.hdpwd.shared.domain.VaultState
 
@@ -15,6 +16,25 @@ class SyncTargetApprovalService {
         vault.copy(
             syncTargets = vault.syncTargets.map {
                 it.copy(enabled = false, confirmed = false)
+            },
+        )
+
+    /**
+     * 本机创建用户并主动导入备份时：对已含完整凭据的 S3 目标视为用户确认，可立即同步。
+     */
+    fun activateLocalBackupTargets(vault: VaultState): VaultState =
+        vault.copy(
+            syncTargets = vault.syncTargets.map { target ->
+                if (hasUsableCredentials(target)) {
+                    target.copy(
+                        enabled = true,
+                        confirmed = true,
+                        status = if (target.status == SyncStatus.FAILED) target.status else SyncStatus.PENDING,
+                        lastErrorCode = null,
+                    )
+                } else {
+                    target.copy(enabled = false, confirmed = false)
+                }
             },
         )
 
@@ -37,4 +57,11 @@ class SyncTargetApprovalService {
                 if (it.id == targetId) it.copy(confirmed = false, enabled = false) else it
             },
         )
+
+    private fun hasUsableCredentials(target: SyncTarget): Boolean =
+        target.accessKeyId.isNotBlank() &&
+            target.encryptedCredentialsHex.isNotBlank() &&
+            target.credentialsSaltHex.isNotBlank() &&
+            target.endpoint.isNotBlank() &&
+            target.bucket.isNotBlank()
 }

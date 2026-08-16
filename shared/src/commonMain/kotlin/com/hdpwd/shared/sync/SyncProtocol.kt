@@ -103,6 +103,7 @@ class SyncMerger {
                 entityId = event.entityId,
                 deletedAt = event.clock.physicalMillis,
                 transactionId = event.transactionId,
+                revision = event.deviceSequence,
             )
             return vault.copy(
                 folders = vault.folders.filterNot { it.id == event.entityId },

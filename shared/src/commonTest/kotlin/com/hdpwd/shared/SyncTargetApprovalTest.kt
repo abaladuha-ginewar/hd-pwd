@@ -26,4 +26,34 @@ class SyncTargetApprovalTest {
         assertTrue(approved.syncTargets.single().enabled)
         assertTrue(approved.syncTargets.single().confirmed)
     }
+
+    /**
+     * 本机创建用户导入备份时，含完整凭据的目标应自动启用。
+     */
+    @Test
+    fun localBackupImportActivatesCredentialedTargets() {
+        val ready = SyncTarget(
+            id = EntityId("ready"),
+            provider = "s3",
+            endpoint = "https://example.test",
+            bucket = "bucket",
+            region = "us-east-1",
+            accessKeyId = "AKIA",
+            encryptedCredentialsHex = "abcd",
+            credentialsSaltHex = "1234",
+        )
+        val incomplete = SyncTarget(
+            id = EntityId("incomplete"),
+            provider = "s3",
+            endpoint = "https://example.test",
+            bucket = "bucket",
+            region = "us-east-1",
+        )
+        val activated = SyncTargetApprovalService().activateLocalBackupTargets(
+            VaultState(EntityId("vault"), syncTargets = listOf(ready, incomplete)),
+        )
+        assertTrue(activated.syncTargets.single { it.id == EntityId("ready") }.confirmed)
+        assertTrue(activated.syncTargets.single { it.id == EntityId("ready") }.enabled)
+        assertFalse(activated.syncTargets.single { it.id == EntityId("incomplete") }.confirmed)
+    }
 }

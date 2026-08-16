@@ -55,6 +55,10 @@ class S3ProviderPresetTest {
             "https://abc123.r2.cloudflarestorage.com",
             S3ProviderPreset.CLOUDFLARE.suggestEndpoint("auto", "abc123"),
         )
+        assertEquals(
+            "https://s3.cstcloud.cn",
+            S3ProviderPreset.CSTCLOUD_CAPSULE.suggestEndpoint("us-east-1"),
+        )
         assertEquals("", S3ProviderPreset.CUSTOM.suggestEndpoint("us-east-1"))
     }
 

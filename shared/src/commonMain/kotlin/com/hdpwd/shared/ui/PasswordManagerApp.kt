@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material.icons.filled.Visibility
@@ -42,6 +43,7 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Text
@@ -50,6 +52,9 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import com.hdpwd.shared.sync.S3ProviderPreset
 import com.hdpwd.shared.sync.normalizeObjectPrefix
+import com.hdpwd.shared.platform.platformHttpClient
+import com.hdpwd.shared.sync.KtorS3ObjectStore
+import com.hdpwd.shared.sync.awsAmzDate
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -100,6 +105,7 @@ import com.hdpwd.shared.sync.S3Credentials
 import com.hdpwd.shared.sync.S3TargetService
 import com.hdpwd.shared.sync.SealedS3CredentialPayload
 import com.hdpwd.shared.sync.SyncScheduler
+import com.hdpwd.shared.sync.SyncTargetApprovalService
 import com.hdpwd.shared.sync.VaultS3SyncService
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -425,7 +431,11 @@ private fun CreateUserScreen(
                                     platformCryptoProvider().randomBytes(16)
                                         .joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') },
                                 )
-                                val vault = importedVault?.copy(vaultId = id) ?: VaultState(id)
+                                // 创建用户时主动导入的备份含 S3 配置：视为本机确认，进入密码库后立即同步
+                                val vault = importedVault?.let { imported ->
+                                    SyncTargetApprovalService()
+                                        .activateLocalBackupTargets(imported.copy(vaultId = id))
+                                } ?: VaultState(id)
                                 val envelope = envelopeService.create(recoveryPassword, localPassword)
                                 val localKey = envelopeService.unlockLocalKey(envelope, localPassword)
                                 var sealed: ByteArray? = null
@@ -596,7 +606,10 @@ private fun VaultScreen(
     val syncService = remember { VaultS3SyncService() }
     var vault by remember(user.id.value) { mutableStateOf(user.vault) }
     LaunchedEffect(user.vault) {
-        vault = user.vault
+        // 父级回写不得覆盖本机更高版本（避免进行中的旧同步结果把新编辑冲掉）
+        if (user.vault.contentVersion() >= vault.contentVersion()) {
+            vault = user.vault
+        }
     }
     var query by remember { mutableStateOf("") }
     var editingEntry by remember { mutableStateOf<PasswordEntry?>(null) }
@@ -608,6 +621,8 @@ private fun VaultScreen(
     var showDeleteConfirmation by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var showS3Settings by remember { mutableStateOf(false) }
+    var showExitSyncDialog by remember { mutableStateOf(false) }
+    var exitSyncWaiting by remember { mutableStateOf(false) }
     var exportMessage by remember { mutableStateOf<String?>(null) }
     var authMessage by remember { mutableStateOf<String?>(null) }
     var syncBanner by remember { mutableStateOf<String?>(null) }
@@ -615,17 +630,76 @@ private fun VaultScreen(
         object {
             var vaultSnapshot: VaultState = user.vault
             var localSaveReady: Boolean = true
+            /** 添加/编辑密码项或文件夹时为 true，用于取消待执行静默同步。 */
+            var editorOpen: Boolean = false
+            /** 递增后使进行中的同步结果作废，避免旧快照覆盖新编辑。 */
+            var syncGeneration: Long = 0L
             var unlock: (suspend (suspend (CharSequence) -> Unit) -> Boolean)? = null
             var publishVault: ((VaultState) -> Unit)? = null
             var publishBanner: ((String?) -> Unit)? = null
+            var persistVault: (suspend (VaultState, CharSequence) -> Unit)? = null
         }
     }
-    syncBridge.vaultSnapshot = vault
+    val syncScheduler = remember(user.id.value) {
+        SyncScheduler(
+            scope = scope,
+            localSaveCompleted = { syncBridge.localSaveReady },
+            quietPeriodMillis = 5_000L,
+            sync = { target ->
+                val generation = syncBridge.syncGeneration
+                val unlock = syncBridge.unlock ?: return@SyncScheduler
+                unlock { recoveryPassword ->
+                    if (generation != syncBridge.syncGeneration) return@unlock
+                    val snapshot = syncBridge.vaultSnapshot
+                    val syncing = snapshot.copy(
+                        syncTargets = snapshot.syncTargets.map {
+                            if (it.id == target.id) it.copy(status = SyncStatus.SYNCING) else it
+                        },
+                    )
+                    syncBridge.vaultSnapshot = syncing
+                    if (generation == syncBridge.syncGeneration) {
+                        syncBridge.publishVault?.invoke(syncing)
+                    }
+                    val result = syncService.syncTarget(target, syncBridge.vaultSnapshot, recoveryPassword)
+                    if (generation != syncBridge.syncGeneration) return@unlock
+                    val next = result.vault.copy(
+                        syncTargets = result.vault.syncTargets.map {
+                            if (it.id == result.target.id) result.target else it
+                        },
+                    )
+                    syncBridge.vaultSnapshot = next
+                    syncBridge.publishVault?.invoke(next)
+                    if (result.target.status == SyncStatus.SUCCESS) {
+                        syncBridge.persistVault?.invoke(next, recoveryPassword)
+                    }
+                    syncBridge.publishBanner?.invoke(
+                        when {
+                            result.target.status == SyncStatus.FAILED ->
+                                "同步失败：${UserFacingText.fromErrorCode(result.target.lastErrorCode) ?: "请检查配置"}"
+                            result.target.status == SyncStatus.SUCCESS && result.changed ->
+                                "已同步到 ${UserFacingText.providerName(result.target.provider)}"
+                            else -> null
+                        },
+                    )
+                }
+            },
+        )
+    }
+    // 静默等待期间不要用 UI 状态覆盖快照，避免冲掉 commit 写入的最新内容
+    if (!syncScheduler.hasPendingJobs()) {
+        syncBridge.vaultSnapshot = vault
+    }
     syncBridge.publishVault = { next ->
         vault = next
         onVaultChanged(next)
     }
     syncBridge.publishBanner = { syncBanner = it }
+    syncBridge.persistVault = { next, recoveryPassword ->
+        repository?.writeVault(user.id.value, recoveryPassword, next)
+    }
+    DisposableEffect(user.id.value) {
+        onDispose { syncScheduler.cancel() }
+    }
     val currentDepth = vault.folders.firstOrNull { it.id == currentFolderId }?.depth ?: 1
     val canAddFolder = currentDepth < 3
 
@@ -656,47 +730,6 @@ private fun VaultScreen(
 
     syncBridge.unlock = { block -> withRecoveryPassword(block) }
 
-    val syncScheduler = remember(user.id.value) {
-        SyncScheduler(
-            scope = scope,
-            localSaveCompleted = { syncBridge.localSaveReady },
-            quietPeriodMillis = 5_000L,
-            sync = { target ->
-                val unlock = syncBridge.unlock ?: return@SyncScheduler
-                unlock { recoveryPassword ->
-                    val snapshot = syncBridge.vaultSnapshot
-                    val syncing = snapshot.copy(
-                        syncTargets = snapshot.syncTargets.map {
-                            if (it.id == target.id) it.copy(status = SyncStatus.SYNCING) else it
-                        },
-                    )
-                    syncBridge.vaultSnapshot = syncing
-                    syncBridge.publishVault?.invoke(syncing)
-                    val updated = syncService.syncTarget(target, syncBridge.vaultSnapshot, recoveryPassword)
-                    val next = syncBridge.vaultSnapshot.copy(
-                        syncTargets = syncBridge.vaultSnapshot.syncTargets.map {
-                            if (it.id == updated.id) updated else it
-                        },
-                    )
-                    syncBridge.vaultSnapshot = next
-                    syncBridge.publishVault?.invoke(next)
-                    syncBridge.publishBanner?.invoke(
-                        when (updated.status) {
-                            SyncStatus.SUCCESS ->
-                                "已同步到 ${UserFacingText.providerName(updated.provider)}"
-                            SyncStatus.FAILED ->
-                                "同步失败：${UserFacingText.fromErrorCode(updated.lastErrorCode) ?: "请检查配置"}"
-                            else -> null
-                        },
-                    )
-                }
-            },
-        )
-    }
-    DisposableEffect(user.id.value) {
-        onDispose { syncScheduler.cancel() }
-    }
-
     fun scheduleRemoteSync(targets: List<SyncTarget>, immediate: Boolean = false) {
         syncScheduler.schedule(
             targets = targets,
@@ -704,18 +737,83 @@ private fun VaultScreen(
         )
     }
 
+    fun hasReadySyncTargets(targets: List<SyncTarget> = vault.syncTargets): Boolean =
+        targets.any { it.enabled && it.confirmed }
+
+    fun invalidateInFlightSync() {
+        syncBridge.syncGeneration++
+    }
+
+    fun pauseSyncForEditor() {
+        syncBridge.editorOpen = true
+        invalidateInFlightSync()
+        syncScheduler.cancel()
+    }
+
+    fun resumeSyncAfterEditor(scheduleQuiet: Boolean) {
+        syncBridge.editorOpen = false
+        if (scheduleQuiet && hasReadySyncTargets()) {
+            scheduleRemoteSync(vault.syncTargets, immediate = false)
+        }
+    }
+
+    fun triggerManualSync() {
+        if (!hasReadySyncTargets()) {
+            syncBanner = "请先配置并启用至少一个 S3 同步目标"
+            return
+        }
+        invalidateInFlightSync()
+        syncBridge.editorOpen = false
+        syncBridge.localSaveReady = true
+        syncBridge.vaultSnapshot = vault
+        scheduleRemoteSync(vault.syncTargets, immediate = true)
+    }
+
+    fun needsExitSyncPrompt(): Boolean {
+        if (!hasReadySyncTargets()) return false
+        if (syncScheduler.hasPendingJobs()) return true
+        if (!syncBridge.localSaveReady) return true
+        return vault.syncTargets.any {
+            it.enabled && it.confirmed &&
+                (it.status == SyncStatus.SYNCING ||
+                    it.status == SyncStatus.PENDING ||
+                    it.status == SyncStatus.FAILED)
+        }
+    }
+
+    fun requestLeaveVault() {
+        if (needsExitSyncPrompt()) {
+            showExitSyncDialog = true
+        } else {
+            onBack()
+        }
+    }
+
+    // 每次进入密码库（含授权过期后重新验证进入）都做一次 S3 同步检测
+    LaunchedEffect(Unit) {
+        if (!hasReadySyncTargets()) return@LaunchedEffect
+        syncBridge.localSaveReady = true
+        scheduleRemoteSync(vault.syncTargets, immediate = true)
+    }
+
     fun commitVault(next: VaultState, syncImmediately: Boolean = false) {
+        invalidateInFlightSync()
+        syncBridge.editorOpen = false
         vault = next
         syncBridge.vaultSnapshot = next
         onVaultChanged(next)
         syncBridge.localSaveReady = false
+        // 先挂上静默/立即同步任务，等本地保存完成后再执行，避免“保存后忘记调度”
+        if (hasReadySyncTargets(next.syncTargets)) {
+            scheduleRemoteSync(next.syncTargets, immediate = syncImmediately)
+        }
         scope.launch {
             val saved = withRecoveryPassword { recoveryPassword ->
                 repository?.writeVault(user.id.value, recoveryPassword, next)
             }
             syncBridge.localSaveReady = saved
-            if (saved) {
-                scheduleRemoteSync(next.syncTargets, immediate = syncImmediately)
+            if (!saved) {
+                syncScheduler.cancel()
             }
         }
     }
@@ -723,6 +821,7 @@ private fun VaultScreen(
     if (showS3Settings) {
         S3SettingsScreen(
             targets = vault.syncTargets,
+            vault = vault,
             onBack = { showS3Settings = false },
             onChange = { targets ->
                 val previous = vault.syncTargets.associateBy { it.id.value }
@@ -734,6 +833,7 @@ private fun VaultScreen(
                 }
                 commitVault(vault.copy(syncTargets = targets), syncImmediately = newlyReady)
             },
+            onSyncNow = { triggerManualSync() },
             s3Service = s3Service,
             sealCredentials = { accessKeyId, secretAccessKey ->
                 var sealed: SealedS3CredentialPayload? = null
@@ -771,8 +871,12 @@ private fun VaultScreen(
         EntryEditorScreen(
             entry = editingEntry!!,
             isNew = false,
-            onCancel = { editingEntry = null },
+            onCancel = {
+                editingEntry = null
+                resumeSyncAfterEditor(scheduleQuiet = true)
+            },
             onSave = { updated ->
+                syncBridge.editorOpen = false
                 commitVault(editor.updateEntry(vault, updated))
                 editingEntry = null
             },
@@ -783,8 +887,12 @@ private fun VaultScreen(
         FolderEditorScreen(
             folder = editingFolder!!,
             isNew = false,
-            onCancel = { editingFolder = null },
+            onCancel = {
+                editingFolder = null
+                resumeSyncAfterEditor(scheduleQuiet = true)
+            },
             onSave = { updated ->
+                syncBridge.editorOpen = false
                 commitVault(editor.updateFolder(vault, updated))
                 editingFolder = null
             },
@@ -801,8 +909,12 @@ private fun VaultScreen(
                 depth = currentDepth + 1,
             ),
             isNew = true,
-            onCancel = { addingFolder = false },
+            onCancel = {
+                addingFolder = false
+                resumeSyncAfterEditor(scheduleQuiet = true)
+            },
             onSave = { created ->
+                syncBridge.editorOpen = false
                 commitVault(
                     editor.addFolder(
                         vault,
@@ -826,8 +938,12 @@ private fun VaultScreen(
                 title = "",
             ),
             isNew = true,
-            onCancel = { addingEntry = false },
+            onCancel = {
+                addingEntry = false
+                resumeSyncAfterEditor(scheduleQuiet = true)
+            },
             onSave = { created ->
+                syncBridge.editorOpen = false
                 commitVault(editor.addEntry(vault, created))
                 addingEntry = false
             },
@@ -918,6 +1034,57 @@ private fun VaultScreen(
             },
         )
     }
+    if (showExitSyncDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                if (!exitSyncWaiting) showExitSyncDialog = false
+            },
+            title = { Text("尚未完成同步") },
+            text = {
+                Text(
+                    if (exitSyncWaiting) {
+                        "正在同步到 S3，请稍候…"
+                    } else {
+                        "当前有未同步的修改，或最近一次自动同步失败。是否等待同步完成后再退出？"
+                    },
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !exitSyncWaiting,
+                    onClick = {
+                        exitSyncWaiting = true
+                        scope.launch {
+                            while (!syncBridge.localSaveReady) {
+                                delay(50)
+                            }
+                            scheduleRemoteSync(syncBridge.vaultSnapshot.syncTargets, immediate = true)
+                            syncScheduler.awaitIdle()
+                            exitSyncWaiting = false
+                            val failed = syncBridge.vaultSnapshot.syncTargets.any {
+                                it.enabled && it.confirmed && it.status == SyncStatus.FAILED
+                            }
+                            if (failed) {
+                                syncBanner = "同步失败，请检查网络或 S3 配置后再退出"
+                            } else {
+                                showExitSyncDialog = false
+                                onBack()
+                            }
+                        }
+                    },
+                ) { Text(if (exitSyncWaiting) "同步中…" else "等待同步") }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !exitSyncWaiting,
+                    onClick = {
+                        showExitSyncDialog = false
+                        onBack()
+                    },
+                ) { Text("直接退出") }
+            },
+        )
+    }
     SafeScreen(
         floatingActionButton = {
             Column(
@@ -965,6 +1132,7 @@ private fun VaultScreen(
                         icon = Icons.Filled.Key,
                         description = "添加密码项",
                         onClick = {
+                            pauseSyncForEditor()
                             addingEntry = true
                             showAddMenu = false
                         },
@@ -974,6 +1142,7 @@ private fun VaultScreen(
                             icon = Icons.Filled.CreateNewFolder,
                             description = "添加文件夹",
                             onClick = {
+                                pauseSyncForEditor()
                                 addingFolder = true
                                 showAddMenu = false
                             },
@@ -1006,7 +1175,7 @@ private fun VaultScreen(
             ) {
                 IconButton(onClick = {
                     if (currentFolderId == null) {
-                        onBack()
+                        requestLeaveVault()
                     } else {
                         currentFolderId = vault.folders.firstOrNull { it.id == currentFolderId }?.parentId
                         query = ""
@@ -1064,7 +1233,10 @@ private fun VaultScreen(
                                     currentFolderId = item.folder.id
                                     query = ""
                                 },
-                                onEdit = { editingFolder = item.folder },
+                                onEdit = {
+                                    pauseSyncForEditor()
+                                    editingFolder = item.folder
+                                },
                             )
                             is BrowseItem.EntryItem -> PasswordEntryCard(
                                 entry = item.entry,
@@ -1098,7 +1270,10 @@ private fun VaultScreen(
                                         }
                                     }
                                 },
-                                onEdit = { editingEntry = item.entry },
+                                onEdit = {
+                                    pauseSyncForEditor()
+                                    editingEntry = item.entry
+                                },
                             )
                         }
                     }
@@ -1318,6 +1493,7 @@ private fun EntryEditorScreen(
                 label = { Text("key") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
+                supportingText = { Text("支持字母、数字、下划线、点和连字符") },
             )
             OutlinedTextField(
                 title,
@@ -1591,8 +1767,10 @@ private fun VaultSettingsScreen(
 @Composable
 private fun S3SettingsScreen(
     targets: List<SyncTarget>,
+    vault: VaultState,
     onBack: () -> Unit,
     onChange: (List<SyncTarget>) -> Unit,
+    onSyncNow: () -> Unit,
     s3Service: S3TargetService,
     sealCredentials: suspend (accessKeyId: String, secretAccessKey: String) -> SealedS3CredentialPayload,
 ) {
@@ -1603,11 +1781,16 @@ private fun S3SettingsScreen(
     var endpoint by remember { mutableStateOf(S3ProviderPreset.ALIYUN.suggestEndpoint(S3ProviderPreset.ALIYUN.defaultRegion)) }
     var bucket by remember { mutableStateOf("") }
     var region by remember { mutableStateOf(S3ProviderPreset.ALIYUN.defaultRegion) }
-    var objectPrefix by remember { mutableStateOf("hd-pwd") }
+    var objectPrefix by remember { mutableStateOf("") }
     var accessKeyId by remember { mutableStateOf("") }
     var secretAccessKey by remember { mutableStateOf("") }
     var saving by remember { mutableStateOf(false) }
+    var testing by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var testSuccess by remember { mutableStateOf<String?>(null) }
+    val contentMutation = vault.latestContentMutation()
+    val hasReadyTarget = targets.any { it.enabled && it.confirmed }
+    val syncing = targets.any { it.status == SyncStatus.SYNCING }
 
     fun applyPreset(next: S3ProviderPreset) {
         preset = next
@@ -1620,6 +1803,99 @@ private fun S3SettingsScreen(
             else -> next.suggestEndpoint(next.defaultRegion)
         }
         error = null
+        testSuccess = null
+    }
+
+    fun resolvedDraftEndpoint(): String {
+        var value = endpoint.trim().ifBlank { preset.suggestEndpoint(region, accountId) }.trim()
+        // 官网常写 s3.cstcloud.cn（无协议）；自动补 https://
+        if (value.isNotEmpty() &&
+            !value.startsWith("https://") &&
+            !value.startsWith("http://")
+        ) {
+            value = "https://$value"
+        }
+        return value.trimEnd('/')
+    }
+
+    /**
+     * 校验当前表单并返回可用于连接测试的临时目标（不含封装凭据）。
+     */
+    fun buildDraftTargetForTest(): SyncTarget {
+        require(!(preset.requiresAccountId && accountId.isBlank() && !manualAll)) {
+            "请填写 Cloudflare Account ID，或勾选手动编辑后自行填写端点"
+        }
+        require(accessKeyId.isNotBlank() && secretAccessKey.isNotBlank()) {
+            "请填写 Access Key 和 Secret Access Key"
+        }
+        val resolvedEndpoint = resolvedDraftEndpoint()
+        require(
+            resolvedEndpoint.startsWith("https://") ||
+                resolvedEndpoint.startsWith("http://localhost") ||
+                resolvedEndpoint.startsWith("http://127.0.0.1"),
+        ) {
+            "端点地址必须以 https:// 开头（本机调试可用 http://localhost）"
+        }
+        require(bucket.trim().matches(Regex("[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]"))) {
+            "Bucket 名称无效：需为 3–63 位小写字母、数字、点或短横线"
+        }
+        val resolvedRegion = region.trim().ifBlank { preset.defaultRegion }
+        require(resolvedRegion.isNotBlank()) { "区域不能为空" }
+        return SyncTarget(
+            id = EntityId("draft-test"),
+            provider = preset.providerCode,
+            endpoint = resolvedEndpoint.trim().trimEnd('/'),
+            bucket = bucket.trim(),
+            region = resolvedRegion,
+            objectPrefix = normalizeObjectPrefix(objectPrefix),
+            accessKeyId = accessKeyId.trim(),
+            enabled = false,
+            confirmed = false,
+            status = SyncStatus.IDLE,
+        )
+    }
+
+    suspend fun runConnectionTest(): Boolean {
+        error = null
+        testSuccess = null
+        val draft = try {
+            buildDraftTargetForTest()
+        } catch (ex: Throwable) {
+            error = UserFacingText.fromThrowable(ex, "请先完善配置")
+            return false
+        }
+        val secretBytes = secretAccessKey.trim().encodeToByteArray()
+        val credentials = S3Credentials(accessKeyId.trim(), secretBytes)
+        return try {
+            val store = KtorS3ObjectStore(
+                client = platformHttpClient(),
+                endpoint = draft.endpoint,
+                bucket = draft.bucket,
+                region = draft.region,
+                credentials = credentials,
+                clock = ::awsAmzDate,
+                forcePathStyle = S3ProviderPreset.fromProviderCode(draft.provider).forcePathStyle,
+            )
+            val result = s3Service.testConnection(draft, store)
+            if (result.status == SyncStatus.SUCCESS) {
+                testSuccess = if (draft.objectPrefix.isNotBlank()) {
+                    "连接成功：可访问存储桶目录「${draft.objectPrefix}」"
+                } else {
+                    "连接成功：可访问存储桶"
+                }
+                true
+            } else {
+                error = UserFacingText.fromErrorCode(result.lastErrorCode)
+                    ?: UserFacingText.fromThrowable(null, "连接失败，请检查端点、桶名与密钥")
+                false
+            }
+        } catch (ex: Throwable) {
+            error = UserFacingText.fromThrowable(ex, "连接失败，请检查端点、桶名与密钥")
+            false
+        } finally {
+            credentials.clear()
+            secretBytes.fill(0)
+        }
     }
 
     fun refreshSuggestedEndpoint() {
@@ -1639,6 +1915,35 @@ private fun S3SettingsScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             EditorTopBar(title = "S3 同步配置", onClose = onBack)
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("密码库同步状态", style = MaterialTheme.typography.titleMedium)
+                    Text("版本号：${vault.contentVersion()}")
+                    Text(
+                        "内容最后修改：${UserFacingText.formatDateTime(contentMutation.updatedAt)}" +
+                            if (contentMutation.revision > 0L) " · 修订 ${contentMutation.revision}" else "",
+                    )
+                    Button(
+                        onClick = onSyncNow,
+                        enabled = hasReadyTarget && !syncing,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(Icons.Filled.Refresh, contentDescription = null)
+                        Spacer(Modifier.size(8.dp))
+                        Text(if (syncing) "同步中…" else "立即同步")
+                    }
+                    if (!hasReadyTarget) {
+                        Text(
+                            "请先添加并确认启用至少一个 S3 目标",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
             if (targets.isEmpty()) {
                 Text("尚未配置同步目标")
             } else {
@@ -1655,7 +1960,9 @@ private fun S3SettingsScreen(
                             Text(target.endpoint, style = MaterialTheme.typography.bodySmall)
                             Text("存储桶：${target.bucket}")
                             if (target.objectPrefix.isNotBlank()) {
-                                Text("目录：${target.objectPrefix}")
+                                Text("存储目录：${target.objectPrefix}")
+                            } else {
+                                Text("存储目录：Bucket 根目录")
                             }
                             Text("区域：${target.region}")
                             Text(
@@ -1669,6 +1976,11 @@ private fun S3SettingsScreen(
                                     append(if (target.confirmed) " · 已确认" else " · 待确认")
                                     if (errorText != null) append(" · $errorText")
                                 },
+                            )
+                            Text("上次同步：${UserFacingText.formatDateTime(target.lastSyncAt)}")
+                            Text(
+                                "同步时版本：" +
+                                    (target.lastSyncRevision?.toString() ?: "—"),
                             )
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 if (!target.confirmed) {
@@ -1769,11 +2081,13 @@ private fun S3SettingsScreen(
             OutlinedTextField(
                 objectPrefix,
                 { objectPrefix = it },
-                label = { Text("对象目录前缀") },
-                placeholder = { Text("如 hd-pwd 或 backups/phone") },
+                label = { Text("存储目录") },
+                placeholder = { Text("如 family-vault；留空表示 Bucket 根目录") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
-                supportingText = { Text("对象将写入 Bucket 下该目录，可留空表示根目录") },
+                supportingText = {
+                    Text("备份写入该目录下的 vault.dat；不自动追加用户名或设备目录。相同目录 + 相同恢复密码即同一密码库。")
+                },
             )
             OutlinedTextField(
                 accessKeyId,
@@ -1784,58 +2098,85 @@ private fun S3SettingsScreen(
             )
             SensitivePasswordField(
                 value = secretAccessKey,
-                onValueChange = { secretAccessKey = it },
+                onValueChange = {
+                    secretAccessKey = it
+                    testSuccess = null
+                },
                 label = "Secret Access Key",
             )
             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            Button(
-                onClick = {
-                    scope.launch {
-                        saving = true
-                        error = null
-                        try {
-                            if (preset.requiresAccountId && accountId.isBlank() && !manualAll) {
-                                error = "请填写 Cloudflare Account ID，或勾选手动编辑后自行填写端点"
-                                return@launch
-                            }
-                            if (accessKeyId.isBlank() || secretAccessKey.isBlank()) {
-                                error = "请填写 Access Key 和 Secret Access Key"
-                                return@launch
-                            }
-                            val resolvedEndpoint = endpoint.trim().ifBlank {
-                                preset.suggestEndpoint(region, accountId)
-                            }
-                            val sealed = sealCredentials(accessKeyId.trim(), secretAccessKey)
-                            val target = SyncTarget(
-                                id = EntityId("s3-${Clock.System.now().toEpochMilliseconds()}"),
-                                provider = preset.providerCode,
-                                endpoint = resolvedEndpoint,
-                                bucket = bucket.trim(),
-                                region = region.trim().ifBlank { preset.defaultRegion },
-                                objectPrefix = normalizeObjectPrefix(objectPrefix),
-                                accessKeyId = sealed.accessKeyId,
-                                encryptedCredentialsHex = sealed.encryptedCredentialsHex,
-                                credentialsSaltHex = sealed.credentialsSaltHex,
-                                enabled = false,
-                                confirmed = false,
-                                status = SyncStatus.IDLE,
-                            )
-                            onChange(s3Service.add(targets, target))
-                            bucket = ""
-                            accessKeyId = ""
-                            secretAccessKey = ""
-                            error = null
-                        } catch (ex: Throwable) {
-                            error = UserFacingText.fromThrowable(ex, "添加失败")
-                        } finally {
-                            saving = false
-                        }
-                    }
-                },
-                enabled = !saving,
+            testSuccess?.let {
+                Text(it, color = MaterialTheme.colorScheme.primary)
+            }
+            Row(
                 modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text(if (saving) "正在保存…" else "添加 S3 目标")
+                OutlinedButton(
+                    onClick = {
+                        scope.launch {
+                            testing = true
+                            try {
+                                runConnectionTest()
+                            } finally {
+                                testing = false
+                            }
+                        }
+                    },
+                    enabled = !saving && !testing,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(if (testing) "测试中…" else "测试连接")
+                }
+                Button(
+                    onClick = {
+                        scope.launch {
+                            saving = true
+                            error = null
+                            testSuccess = null
+                            try {
+                                if (preset.requiresAccountId && accountId.isBlank() && !manualAll) {
+                                    error = "请填写 Cloudflare Account ID，或勾选手动编辑后自行填写端点"
+                                    return@launch
+                                }
+                                if (accessKeyId.isBlank() || secretAccessKey.isBlank()) {
+                                    error = "请填写 Access Key 和 Secret Access Key"
+                                    return@launch
+                                }
+                                val resolvedEndpoint = resolvedDraftEndpoint()
+                                val sealed = sealCredentials(accessKeyId.trim(), secretAccessKey.trim())
+                                val target = SyncTarget(
+                                    id = EntityId("s3-${Clock.System.now().toEpochMilliseconds()}"),
+                                    provider = preset.providerCode,
+                                    endpoint = resolvedEndpoint,
+                                    bucket = bucket.trim(),
+                                    region = region.trim().ifBlank { preset.defaultRegion },
+                                    objectPrefix = normalizeObjectPrefix(objectPrefix),
+                                    accessKeyId = sealed.accessKeyId,
+                                    encryptedCredentialsHex = sealed.encryptedCredentialsHex,
+                                    credentialsSaltHex = sealed.credentialsSaltHex,
+                                    enabled = false,
+                                    confirmed = false,
+                                    status = SyncStatus.IDLE,
+                                )
+                                onChange(s3Service.add(targets, target))
+                                bucket = ""
+                                accessKeyId = ""
+                                secretAccessKey = ""
+                                error = null
+                                testSuccess = null
+                            } catch (ex: Throwable) {
+                                error = UserFacingText.fromThrowable(ex, "添加失败")
+                            } finally {
+                                saving = false
+                            }
+                        }
+                    },
+                    enabled = !saving && !testing,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(if (saving) "正在保存…" else "添加目标")
+                }
             }
         }
     }

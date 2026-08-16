@@ -22,6 +22,8 @@ object S3CompatibilityMatrix {
             preset = preset,
             supportsPathStyle = when (preset) {
                 S3ProviderPreset.ALIYUN -> false
+                // 数据胶囊未提供 bucket.s3.cstcloud.cn 解析，必须 Path-Style
+                S3ProviderPreset.CSTCLOUD_CAPSULE -> true
                 else -> true
             },
             requiresCors = true,

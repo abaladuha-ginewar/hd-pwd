@@ -2,6 +2,9 @@ package com.hdpwd.shared.ui
 
 import com.hdpwd.shared.domain.SyncStatus
 import com.hdpwd.shared.sync.S3ProviderPreset
+import kotlinx.datetime.Instant
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toLocalDateTime
 
 /**
  * 面向用户的中文文案与错误映射。
@@ -16,6 +19,29 @@ object UserFacingText {
         SyncStatus.SYNCING -> "同步中"
         SyncStatus.SUCCESS -> "成功"
         SyncStatus.FAILED -> "失败"
+    }
+
+    /**
+     * 将 epoch 毫秒格式化为本地可读时间；无效时返回破折号。
+     */
+    fun formatDateTime(epochMillis: Long?): String {
+        val ms = epochMillis ?: return "—"
+        if (ms <= 0L) return "—"
+        val dateTime = Instant.fromEpochMilliseconds(ms).toLocalDateTime(TimeZone.currentSystemDefault())
+        fun Int.pad(width: Int = 2) = toString().padStart(width, '0')
+        return buildString {
+            append(dateTime.year)
+            append('-')
+            append(dateTime.monthNumber.pad())
+            append('-')
+            append(dateTime.dayOfMonth.pad())
+            append(' ')
+            append(dateTime.hour.pad())
+            append(':')
+            append(dateTime.minute.pad())
+            append(':')
+            append(dateTime.second.pad())
+        }
     }
 
     /**
