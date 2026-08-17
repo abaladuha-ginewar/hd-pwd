@@ -61,6 +61,10 @@ object CryptoDomains {
     const val BACKUP = "hdpwd/backup/v1"
     const val GENERATOR = "hdpwd/generator/v1"
     const val LOCAL_ENVELOPE = "hdpwd/local-envelope/v1"
+    /** 设备锁 DeviceLEK 包装的附加认证数据域。 */
+    const val DEVICE_LOCK = "hdpwd/device-lock/v1"
+    /** 按用户封装本机恢复密码的附加认证数据域。 */
+    const val USER_RECOVERY = "hdpwd/user-recovery/v1"
 }
 
 /**

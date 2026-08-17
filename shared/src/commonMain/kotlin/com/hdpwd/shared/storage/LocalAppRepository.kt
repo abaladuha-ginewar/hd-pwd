@@ -3,12 +3,13 @@ package com.hdpwd.shared.storage
 import com.hdpwd.shared.crypto.CryptoProvider
 import com.hdpwd.shared.domain.EntityId
 import com.hdpwd.shared.domain.VaultState
-import com.hdpwd.shared.security.LocalEnvelopeRecord
+import com.hdpwd.shared.security.DeviceLockRecord
+import com.hdpwd.shared.security.UserRecoveryEnvelope
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 
 /**
- * 本地用户索引中的非敏感摘要。
+ * 本地用户索引中的非敏感摘要，不得包含密钥材料。
  */
 @Serializable
 data class PersistedUserMeta(
@@ -23,7 +24,7 @@ private data class PersistedUserIndex(
 )
 
 /**
- * 本地用户、信封、Vault 与生物识别封装的统一仓储。
+ * 本地用户、设备锁、每用户恢复密码封装与 Vault 的统一仓储。
  */
 class LocalAppRepository(
     private val bytes: AtomicByteStore,
@@ -49,43 +50,72 @@ class LocalAppRepository(
     }
 
     /**
-     * 读取本机信封。
+     * 读取设备锁；尚未设置时返回 null。
      */
-    suspend fun readEnvelope(userId: String): LocalEnvelopeRecord? {
+    suspend fun readDeviceLock(): DeviceLockRecord? {
+        val raw = bytes.read(DEVICE_LOCK_KEY) ?: return null
+        return vaultJson.decodeFromString(raw.decodeToString())
+    }
+
+    /**
+     * 写入设备锁记录，与用户索引分离。
+     */
+    suspend fun writeDeviceLock(record: DeviceLockRecord) {
+        val payload = vaultJson.encodeToString(record).encodeToByteArray()
+        bytes.writeAtomically(DEVICE_LOCK_KEY, payload)
+    }
+
+    /**
+     * 读取设备级生物识别封装；不存在时返回 null。
+     */
+    suspend fun readDeviceBiometricSealed(): ByteArray? = bytes.read(DEVICE_BIOMETRIC_KEY)
+
+    /**
+     * 写入或清除设备级生物识别封装。
+     */
+    suspend fun writeDeviceBiometricSealed(sealed: ByteArray?) {
+        if (sealed == null) {
+            bytes.delete(DEVICE_BIOMETRIC_KEY)
+        } else {
+            bytes.writeAtomically(DEVICE_BIOMETRIC_KEY, sealed)
+        }
+    }
+
+    /**
+     * 读取某用户的本机恢复密码封装。
+     */
+    suspend fun readEnvelope(userId: String): UserRecoveryEnvelope? {
         val raw = bytes.read(envelopeKey(userId)) ?: return null
         return vaultJson.decodeFromString(raw.decodeToString())
     }
 
     /**
-     * 写入本机信封。
+     * 写入某用户的本机恢复密码封装。
      */
-    suspend fun writeEnvelope(userId: String, envelope: LocalEnvelopeRecord) {
+    suspend fun writeEnvelope(userId: String, envelope: UserRecoveryEnvelope) {
         val payload = vaultJson.encodeToString(envelope).encodeToByteArray()
         bytes.writeAtomically(envelopeKey(userId), payload)
     }
 
     /**
-     * 读取生物识别封装的 LEK；不存在时返回 null。
+     * 读取已废弃的每用户生物识别封装，仅用于清理。
      */
-    suspend fun readBiometricSealed(userId: String): ByteArray? =
-        bytes.read(biometricKey(userId))
-
-    /**
-     * 写入或清除生物识别封装。
-     */
-    suspend fun writeBiometricSealed(userId: String, sealed: ByteArray?) {
-        if (sealed == null) {
-            bytes.delete(biometricKey(userId))
-        } else {
-            bytes.writeAtomically(biometricKey(userId), sealed)
-        }
-    }
+    suspend fun readLegacyUserBiometricSealed(userId: String): ByteArray? =
+        bytes.read(legacyUserBiometricKey(userId))
 
     /**
      * 解密读取 Vault。
      */
     suspend fun readVault(userId: String, recoveryPassword: CharSequence): VaultState {
         val encrypted = vaultStore.read(userId) ?: return VaultState(EntityId(userId))
+        return vaultCipher.decrypt(recoveryPassword, encrypted)
+    }
+
+    /**
+     * 用恢复密码认证已有密文；没有本地密码库或密码错误时失败。
+     */
+    suspend fun authenticateVault(userId: String, recoveryPassword: CharSequence): VaultState {
+        val encrypted = vaultStore.read(userId) ?: error("本地密码库不存在")
         return vaultCipher.decrypt(recoveryPassword, encrypted)
     }
 
@@ -98,19 +128,21 @@ class LocalAppRepository(
     }
 
     /**
-     * 删除某用户的全部本地数据。
+     * 删除某用户的密码库与恢复密码封装，保留设备锁。
      */
     suspend fun deleteUser(userId: String) {
         vaultStore.delete(userId)
         bytes.delete(envelopeKey(userId))
-        bytes.delete(biometricKey(userId))
+        bytes.delete(legacyUserBiometricKey(userId))
     }
 
     private fun envelopeKey(userId: String) = "$userId-envelope"
 
-    private fun biometricKey(userId: String) = "$userId-biometric"
+    private fun legacyUserBiometricKey(userId: String) = "$userId-biometric"
 
     companion object {
         private const val INDEX_KEY = "users-index"
+        private const val DEVICE_LOCK_KEY = "device-lock"
+        private const val DEVICE_BIOMETRIC_KEY = "device-lock-biometric"
     }
 }

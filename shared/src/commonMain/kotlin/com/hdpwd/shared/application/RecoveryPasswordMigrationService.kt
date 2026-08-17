@@ -1,8 +1,9 @@
 package com.hdpwd.shared.application
 
 import com.hdpwd.shared.domain.VaultState
-import com.hdpwd.shared.security.LocalEnvelopeRecord
+import com.hdpwd.shared.security.LocalEnvelopeKey
 import com.hdpwd.shared.security.LocalEnvelopeService
+import com.hdpwd.shared.security.UserRecoveryEnvelope
 import com.hdpwd.shared.storage.VaultCipher
 import com.hdpwd.shared.storage.VaultStore
 
@@ -30,18 +31,24 @@ class RecoveryPasswordMigrationService(
     private val localStore: VaultStore,
 ) {
     /**
-     * 重新加密本地及远端数据，并返回新的本机封装。
+     * 重新加密本地及远端数据，并把新恢复密码封装到现有 DeviceLEK。
      */
     suspend fun migrate(
         vault: VaultState,
         oldRecoveryPassword: CharSequence,
         newRecoveryPassword: CharSequence,
-        localPassword: CharSequence,
+        deviceKey: LocalEnvelopeKey,
+        deviceGeneration: String,
         targets: List<MigrationTarget>,
     ): RecoveryPasswordMigrationResult {
         val oldPayload = vaultCipher.encrypt(oldRecoveryPassword, vault)
         val newPayload = vaultCipher.encrypt(newRecoveryPassword, vault)
-        val newEnvelope = localEnvelopeService.create(newRecoveryPassword, localPassword)
+        val newEnvelope = localEnvelopeService.sealRecoveryPassword(
+            deviceKey = deviceKey,
+            generation = deviceGeneration,
+            userId = vault.vaultId.value,
+            recoveryPassword = newRecoveryPassword,
+        )
         return try {
             localStore.write(vault.vaultId.value, newPayload)
             targets.forEach { it.writeNew(newPayload) }
@@ -64,7 +71,7 @@ class RecoveryPasswordMigrationService(
  */
 data class RecoveryPasswordMigrationResult(
     val encryptedPayload: ByteArray,
-    val localEnvelope: LocalEnvelopeRecord,
+    val recoveryEnvelope: UserRecoveryEnvelope,
     val historicalBackupsWarning: String =
         "迁移前导出的历史备份仍需使用迁移前的恢复密码",
 )

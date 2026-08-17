@@ -3,11 +3,14 @@ package com.hdpwd.shared
 import com.hdpwd.shared.security.BiometricAvailability
 import com.hdpwd.shared.security.BiometricEnrollmentDecision
 import com.hdpwd.shared.security.BiometricEnrollmentService
+import com.hdpwd.shared.security.DeviceUnlockPreference
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 /**
- * 验证创建用户阶段生物识别取消后的主密码回退。
+ * 验证设备锁生物识别初始选择与默认验证方式。
  */
 class BiometricEnrollmentTest {
     /**
@@ -22,6 +25,45 @@ class BiometricEnrollmentTest {
         assertEquals(
             BiometricEnrollmentDecision.PASSWORD_ONLY,
             BiometricEnrollmentService.decide(BiometricAvailability.UNAVAILABLE, true, true),
+        )
+        assertEquals(
+            BiometricEnrollmentDecision.ENABLED,
+            BiometricEnrollmentService.decide(BiometricAvailability.AVAILABLE, true, true),
+        )
+    }
+
+    /**
+     * 只有偏好开启、能力可用且仍有封装时才自动拉起生物识别。
+     */
+    @Test
+    fun autoPromptFollowsPreferenceAndCapability() {
+        assertTrue(
+            DeviceUnlockPreference.shouldAutoPromptBiometric(
+                preferBiometric = true,
+                availability = BiometricAvailability.AVAILABLE,
+                hasSealedBlob = true,
+            ),
+        )
+        assertFalse(
+            DeviceUnlockPreference.shouldAutoPromptBiometric(
+                preferBiometric = true,
+                availability = BiometricAvailability.AVAILABLE,
+                hasSealedBlob = false,
+            ),
+        )
+        assertFalse(
+            DeviceUnlockPreference.shouldAutoPromptBiometric(
+                preferBiometric = false,
+                availability = BiometricAvailability.AVAILABLE,
+                hasSealedBlob = true,
+            ),
+        )
+        assertFalse(
+            DeviceUnlockPreference.shouldAutoPromptBiometric(
+                preferBiometric = true,
+                availability = BiometricAvailability.UNAVAILABLE,
+                hasSealedBlob = true,
+            ),
         )
     }
 }

@@ -38,12 +38,14 @@ class UserImportServiceTest {
             currentUsers = emptyList(),
             username = "alice",
             recoveryPassword = "recovery",
-            localPassword = "local",
+            deviceKey = com.hdpwd.shared.security.LocalEnvelopeKey(ByteArray(32) { 1 }),
+            deviceGeneration = "gen-1",
             backup = byteArrayOf(1, 2),
         )
         assertEquals("alice", imported.user.username)
         assertEquals("vault", store.writtenUser)
         assertEquals(vault, imported.vault)
+        assertEquals("gen-1", imported.recoveryEnvelope.deviceGeneration)
     }
 }
 

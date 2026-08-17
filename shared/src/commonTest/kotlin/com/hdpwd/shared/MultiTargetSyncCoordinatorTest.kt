@@ -40,7 +40,7 @@ class MultiTargetSyncCoordinatorTest {
         val b = MemoryS3Store()
         val c = MemoryS3Store()
         a.put(
-            "vault/vault/deltas/device/1.dat",
+            "deltas/device/1.dat",
             vaultJson.encodeToString(SyncDelta(EntityId("device"), 1, listOf(event))).encodeToByteArray(),
         )
         val targetA = SyncTargetStore(SyncTarget(EntityId("a"), "s3", "https://a", "a", "r", true, true), a)

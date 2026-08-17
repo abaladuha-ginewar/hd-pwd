@@ -4,7 +4,7 @@ import com.sun.jna.platform.win32.Crypt32Util
 import java.util.Locale
 
 /**
- * Windows DPAPI（用户登录态绑定）封装 LEK。
+ * Windows DPAPI（用户登录态绑定）封装 DeviceLEK。
  *
  * 在可用时作为 Desktop「安全密钥 / 用户验证」能力；非 Windows 环境回落为 [UNAVAILABLE]，
  * UI 将隐藏生物识别选项并使用本机主密码。

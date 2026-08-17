@@ -11,7 +11,7 @@ enum class BiometricAvailability {
 }
 
 /**
- * 生物识别硬件封装 LEK 的平台接口。
+ * 生物识别硬件封装 DeviceLEK 的平台接口。
  */
 interface BiometricProvider {
     /**
@@ -20,12 +20,12 @@ interface BiometricProvider {
     fun availability(): BiometricAvailability
 
     /**
-     * 在用户通过验证后封装 LEK。
+     * 在用户通过验证后封装 DeviceLEK。
      */
     suspend fun seal(label: String, envelopeKey: ByteArray): ByteArray
 
     /**
-     * 弹出生物识别验证并解封装 LEK。
+     * 弹出生物识别验证并解封装 DeviceLEK。
      */
     suspend fun open(label: String, sealedKey: ByteArray): ByteArray
 

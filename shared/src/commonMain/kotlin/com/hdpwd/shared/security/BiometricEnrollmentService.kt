@@ -1,7 +1,7 @@
 package com.hdpwd.shared.security
 
 /**
- * 创建用户阶段的生物识别初始选择结果。
+ * 设备锁初始设置或设置页中的生物识别选择结果。
  */
 enum class BiometricEnrollmentDecision {
     ENABLED,
@@ -9,7 +9,7 @@ enum class BiometricEnrollmentDecision {
 }
 
 /**
- * 处理初始验证取消和设备能力降级。
+ * 处理初始验证取消和设备能力降级；失败不得启用生物识别偏好。
  */
 object BiometricEnrollmentService {
     /**

@@ -24,7 +24,7 @@ open class SensitiveBytes(bytes: ByteArray) {
 }
 
 /**
- * 会话中仅允许缓存的本机封装密钥。
+ * 授权会话中缓存的 DeviceLEK，不得持久化或写入备份。
  */
 class LocalEnvelopeKey(bytes: ByteArray) : SensitiveBytes(bytes)
 

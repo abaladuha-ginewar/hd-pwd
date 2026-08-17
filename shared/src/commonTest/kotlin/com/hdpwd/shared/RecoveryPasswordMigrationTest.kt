@@ -36,7 +36,8 @@ class RecoveryPasswordMigrationTest {
                 VaultState(EntityId("vault")),
                 "old",
                 "new",
-                "local",
+                com.hdpwd.shared.security.LocalEnvelopeKey(ByteArray(32) { 2 }),
+                "gen-1",
                 listOf(target),
             )
         }

@@ -40,6 +40,8 @@ class AuthorizationSessionTest {
         val session = AuthorizationSession({ 0L })
         session.open(LocalEnvelopeKey(ByteArray(32)))
         assertTrue(session.acquire(OperationPurpose.SYNC) != null)
+        assertTrue(session.acquire(OperationPurpose.CREATE_USER) != null)
+        assertTrue(session.acquire(OperationPurpose.DEVICE_SETTINGS) != null)
         session.clear()
         assertFalse(session.canStart())
     }

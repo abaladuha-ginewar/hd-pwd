@@ -10,6 +10,7 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -34,6 +35,10 @@ class BackupCipherInteropTest {
         )
         val bytes = service.export(recovery, vault)
         assertTrue(bytes.isNotEmpty())
+        val asText = bytes.decodeToString()
+        assertFalse(asText.contains("wrappedDeviceLek"))
+        assertFalse(asText.contains("preferBiometric"))
+        assertFalse(asText.contains("device-lock"))
         val imported = service.import(recovery, bytes)
         assertEquals(vault.vaultId, imported.vaultId)
         assertEquals(1, imported.entries.size)

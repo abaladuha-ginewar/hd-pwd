@@ -67,11 +67,10 @@ private fun ByteArray.toHex(): String =
     joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
 
 /**
- * 创建新用户所需的临时输入，不允许写入 VaultState。
+ * 创建新用户所需的临时输入，不含本机主密码，不允许写入 VaultState。
  */
 data class CreateUserInput(
     val username: String,
     val recoveryPassword: CharSequence,
-    val localPassword: CharSequence,
     val importedVault: VaultState? = null,
 )

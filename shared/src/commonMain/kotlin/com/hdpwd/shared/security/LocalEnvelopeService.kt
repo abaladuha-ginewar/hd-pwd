@@ -4,77 +4,139 @@ import com.hdpwd.shared.crypto.CryptoDomains
 import com.hdpwd.shared.crypto.CryptoProvider
 import com.hdpwd.shared.crypto.EncryptedContainerCodec
 import com.hdpwd.shared.crypto.KdfParameters
-import kotlinx.serialization.Serializable
 
 /**
- * 仅保存本机的恢复密码封装数据，不属于 Vault 或备份载荷。
- */
-@Serializable
-data class LocalEnvelopeRecord(
-    val formatVersion: Int = 1,
-    val wrappedLocalEnvelopeKey: ByteArray,
-    val encryptedRecoveryPassword: ByteArray,
-)
-
-/**
- * 通过本机主密码保护 LEK，并在需要时临时解密恢复密码。
+ * 设备级 DeviceLEK 包装，以及按用户封装本机缓存的恢复密码。
+ *
+ * DeviceLEK 由主密码（及可选生物识别）保护；恢复密码密文用 DeviceLEK 加密，
+ * 附加认证数据绑定用户 id 与设备锁世代，防止串用或用新钥匙去解旧密文。
  */
 class LocalEnvelopeService(
     private val crypto: CryptoProvider,
     private val kdfParameters: KdfParameters,
 ) {
     private val container = EncryptedContainerCodec(crypto)
-    private val associatedData = CryptoDomains.LOCAL_ENVELOPE.encodeToByteArray()
+    private val deviceLockAad = CryptoDomains.DEVICE_LOCK.encodeToByteArray()
+    private val legacyEnvelopeAad = CryptoDomains.LOCAL_ENVELOPE.encodeToByteArray()
 
     /**
-     * 创建随机 LEK、本机主密码封装和恢复密码密文。
+     * 生成新的 DeviceLEK 与世代，并用主密码包装。
      */
-    suspend fun create(
-        recoveryPassword: CharSequence,
-        localPassword: CharSequence,
-    ): LocalEnvelopeRecord {
-        val envelopeKey = crypto.randomBytes(32)
-        val localSalt = crypto.randomBytes(16)
-        val localKey = deriveLocalKey(localPassword, localSalt)
-        return try {
-            val wrappedKey = container.seal(
-                key = localKey,
-                plaintext = envelopeKey,
+    suspend fun createDeviceLock(masterPassword: CharSequence): DeviceLockCreation {
+        val deviceLek = crypto.randomBytes(32)
+        val generation = crypto.randomBytes(16).toHex()
+        val salt = crypto.randomBytes(16)
+        val wrappingKey = deriveLocalKey(masterPassword, salt)
+        try {
+            val wrapped = container.seal(
+                key = wrappingKey,
+                plaintext = deviceLek,
                 kdfParameters = kdfParameters,
-                associatedData = associatedData,
-                salt = localSalt,
+                associatedData = deviceLockAad,
+                salt = salt,
             )
-            val encryptedRecovery = container.seal(
-                key = envelopeKey,
-                plaintext = recoveryPassword.toString().encodeToByteArray(),
-                kdfParameters = kdfParameters,
-                associatedData = associatedData,
-            )
-            LocalEnvelopeRecord(
-                wrappedLocalEnvelopeKey = wrappedKey,
-                encryptedRecoveryPassword = encryptedRecovery,
+            return DeviceLockCreation(
+                record = DeviceLockRecord(
+                    generation = generation,
+                    wrappedDeviceLek = wrapped,
+                    preferBiometric = false,
+                ),
+                deviceKey = LocalEnvelopeKey(deviceLek.copyOf()),
             )
         } finally {
-            envelopeKey.fill(0)
-            localKey.fill(0)
+            deviceLek.fill(0)
+            wrappingKey.fill(0)
         }
     }
 
     /**
-     * 使用本机主密码解封装 LEK；错误密码由 AEAD 完整性校验拒绝。
+     * 使用本机主密码解封装 DeviceLEK；错误密码由 AEAD 拒绝。
      */
-    suspend fun unlockLocalKey(
-        record: LocalEnvelopeRecord,
-        localPassword: CharSequence,
+    suspend fun unlockWithMasterPassword(
+        record: DeviceLockRecord,
+        masterPassword: CharSequence,
     ): LocalEnvelopeKey {
-        val header = container.readHeader(record.wrappedLocalEnvelopeKey)
-        val localKey = deriveLocalKey(localPassword, header.saltHex.hexToByteArray())
+        val header = container.readHeader(record.wrappedDeviceLek)
+        val wrappingKey = deriveLocalKey(masterPassword, header.saltHex.hexToByteArray())
         return try {
-            LocalEnvelopeKey(container.open(localKey, record.wrappedLocalEnvelopeKey))
+            LocalEnvelopeKey(container.open(wrappingKey, record.wrappedDeviceLek))
         } catch (failure: Throwable) {
             throw IllegalArgumentException("本机主密码错误", failure)
         } finally {
-            localKey.fill(0)
+            wrappingKey.fill(0)
+        }
+    }
+
+    /**
+     * 用新主密码重新包装同一把 DeviceLEK，不更换世代。
+     */
+    suspend fun rewrapMasterPassword(
+        record: DeviceLockRecord,
+        deviceKey: LocalEnvelopeKey,
+        newPassword: CharSequence,
+    ): DeviceLockRecord {
+        val salt = crypto.randomBytes(16)
+        val wrappingKey = deriveLocalKey(newPassword, salt)
+        val plaintext = deviceKey.use { it.copyOf() }
+        return try {
+            val wrapped = container.seal(
+                key = wrappingKey,
+                plaintext = plaintext,
+                kdfParameters = kdfParameters,
+                associatedData = deviceLockAad,
+                salt = salt,
+            )
+            record.copy(wrappedDeviceLek = wrapped)
+        } finally {
+            wrappingKey.fill(0)
+            plaintext.fill(0)
+        }
+    }
+
+    /**
+     * 忘记主密码时轮换 DeviceLEK 与世代；调用方只应重绑当前验证成功的用户。
+     */
+    suspend fun rotateDeviceLock(
+        newPassword: CharSequence,
+        preferBiometric: Boolean = false,
+    ): DeviceLockCreation {
+        val created = createDeviceLock(newPassword)
+        return created.copy(record = created.record.copy(preferBiometric = preferBiometric))
+    }
+
+    /**
+     * 用当前 DeviceLEK 封装某用户的恢复密码，AAD 绑定用户 id 与世代。
+     */
+    suspend fun sealRecoveryPassword(
+        deviceKey: LocalEnvelopeKey,
+        generation: String,
+        userId: String,
+        recoveryPassword: CharSequence,
+    ): UserRecoveryEnvelope {
+        val keyBytes = deviceKey.use { it.copyOf() }
+        return try {
+            val encrypted = container.seal(
+                key = keyBytes,
+                plaintext = recoveryPassword.toString().encodeToByteArray(),
+                kdfParameters = kdfParameters,
+                associatedData = userRecoveryAad(userId, generation),
+            )
+            UserRecoveryEnvelope(
+                formatVersion = 2,
+                encryptedRecoveryPassword = encrypted,
+                deviceGeneration = generation,
+            )
+        } finally {
+            keyBytes.fill(0)
+        }
+    }
+
+    /**
+     * 世代不匹配时拒绝解密，避免用新 DeviceLEK 去碰旧密文。
+     */
+    fun requireBound(envelope: UserRecoveryEnvelope, currentGeneration: String) {
+        require(!envelope.needsRebind(currentGeneration)) {
+            "该用户需要用恢复密码重新绑定本机解锁"
         }
     }
 
@@ -82,13 +144,21 @@ class LocalEnvelopeService(
      * 在恢复密码的最短必要生命周期内执行回调并清理明文字节。
      */
     suspend fun <T> withRecoveryPassword(
-        record: LocalEnvelopeRecord,
-        envelopeKey: LocalEnvelopeKey,
+        envelope: UserRecoveryEnvelope,
+        deviceKey: LocalEnvelopeKey,
+        userId: String,
+        currentGeneration: String,
         block: suspend (CharSequence) -> T,
     ): T {
-        val key = envelopeKey.use { it.copyOf() }
+        requireBound(envelope, currentGeneration)
+        val header = container.readHeader(envelope.encryptedRecoveryPassword)
+        val expectedAad = userRecoveryAad(userId, currentGeneration)
+        require(header.associatedDataHex == expectedAad.toHex()) {
+            "恢复密码封装与用户或设备锁世代不匹配"
+        }
+        val key = deviceKey.use { it.copyOf() }
         val recoveryBytes = try {
-            container.open(key, record.encryptedRecoveryPassword)
+            container.open(key, envelope.encryptedRecoveryPassword)
         } finally {
             key.fill(0)
         }
@@ -100,26 +170,93 @@ class LocalEnvelopeService(
     }
 
     /**
-     * 使用已验证的恢复密码重新封装本机主密码，不改变 Vault 数据。
+     * 解开旧版每用户主密码包装的 LEK，仅用于迁移。
      */
-    suspend fun resetLocalPassword(
-        record: LocalEnvelopeRecord,
-        oldLocalPassword: CharSequence,
-        newLocalPassword: CharSequence,
-    ): LocalEnvelopeRecord {
-        val oldKey = unlockLocalKey(record, oldLocalPassword)
+    suspend fun unlockLegacyLocalKey(
+        envelope: UserRecoveryEnvelope,
+        localPassword: CharSequence,
+    ): LocalEnvelopeKey {
+        val wrapped = envelope.wrappedLocalEnvelopeKey
+            ?: error("不是旧版本地封装")
+        val header = container.readHeader(wrapped)
+        val wrappingKey = deriveLocalKey(localPassword, header.saltHex.hexToByteArray())
         return try {
-            withRecoveryPassword(record, oldKey) { recoveryPassword ->
-                create(recoveryPassword, newLocalPassword)
-            }
+            LocalEnvelopeKey(container.open(wrappingKey, wrapped))
+        } catch (failure: Throwable) {
+            throw IllegalArgumentException("本机主密码错误", failure)
         } finally {
-            oldKey.clear()
+            wrappingKey.fill(0)
         }
     }
+
+    /**
+     * 使用旧版每用户 LEK 临时读取恢复密码，仅用于迁移重绑。
+     */
+    suspend fun <T> withLegacyRecoveryPassword(
+        envelope: UserRecoveryEnvelope,
+        legacyKey: LocalEnvelopeKey,
+        block: suspend (CharSequence) -> T,
+    ): T {
+        val key = legacyKey.use { it.copyOf() }
+        val recoveryBytes = try {
+            container.open(key, envelope.encryptedRecoveryPassword)
+        } finally {
+            key.fill(0)
+        }
+        return try {
+            block(recoveryBytes.decodeToString())
+        } finally {
+            recoveryBytes.fill(0)
+        }
+    }
+
+    /**
+     * 构造旧格式封装，供迁移测试与兼容读取。
+     */
+    suspend fun createLegacyEnvelope(
+        recoveryPassword: CharSequence,
+        localPassword: CharSequence,
+    ): UserRecoveryEnvelope {
+        val envelopeKey = crypto.randomBytes(32)
+        val localSalt = crypto.randomBytes(16)
+        val localKey = deriveLocalKey(localPassword, localSalt)
+        return try {
+            val wrappedKey = container.seal(
+                key = localKey,
+                plaintext = envelopeKey,
+                kdfParameters = kdfParameters,
+                associatedData = legacyEnvelopeAad,
+                salt = localSalt,
+            )
+            val encryptedRecovery = container.seal(
+                key = envelopeKey,
+                plaintext = recoveryPassword.toString().encodeToByteArray(),
+                kdfParameters = kdfParameters,
+                associatedData = legacyEnvelopeAad,
+            )
+            UserRecoveryEnvelope(
+                formatVersion = 1,
+                encryptedRecoveryPassword = encryptedRecovery,
+                wrappedLocalEnvelopeKey = wrappedKey,
+            )
+        } finally {
+            envelopeKey.fill(0)
+            localKey.fill(0)
+        }
+    }
+
+    private fun userRecoveryAad(userId: String, generation: String): ByteArray =
+        "${CryptoDomains.USER_RECOVERY}|$userId|$generation".encodeToByteArray()
 
     private suspend fun deriveLocalKey(password: CharSequence, salt: ByteArray): ByteArray =
         crypto.argon2id(password.toString().encodeToByteArray(), salt, kdfParameters)
 }
+
+/**
+ * 将随机字节编码为路径安全的小写十六进制。
+ */
+private fun ByteArray.toHex(): String =
+    joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
 
 /**
  * 解码本机封装头中的十六进制 salt。

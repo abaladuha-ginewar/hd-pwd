@@ -5,7 +5,7 @@ package com.hdpwd.shared.security
  */
 object BiometricCapabilityService {
     /**
-     * 只有可稳定封装 LEK 时才显示启用选项。
+     * 只有可稳定封装 DeviceLEK 时才显示启用选项。
      */
     fun shouldOfferEnable(provider: BiometricProvider): Boolean =
         provider.availability() == BiometricAvailability.AVAILABLE

@@ -86,9 +86,12 @@ import com.hdpwd.shared.application.PasswordRecoveryService
 import com.hdpwd.shared.security.ClipboardPort
 import com.hdpwd.shared.security.SensitiveClipboardController
 import com.hdpwd.shared.security.AuthorizationSession
-import com.hdpwd.shared.security.LocalEnvelopeRecord
+import com.hdpwd.shared.security.DeviceBiometric
+import com.hdpwd.shared.security.DeviceLockRecord
+import com.hdpwd.shared.security.DeviceUnlockPreference
 import com.hdpwd.shared.security.LocalEnvelopeService
 import com.hdpwd.shared.security.OperationPurpose
+import com.hdpwd.shared.security.UserRecoveryEnvelope
 import com.hdpwd.shared.storage.BackupNaming
 import com.hdpwd.shared.storage.BackupService
 import com.hdpwd.shared.storage.DefaultKdfParameters
@@ -100,6 +103,7 @@ import com.hdpwd.shared.security.BiometricAvailability
 import com.hdpwd.shared.security.BiometricProvider
 import com.hdpwd.shared.security.LocalEnvelopeKey
 import com.hdpwd.shared.security.UnavailableBiometricProvider
+import androidx.compose.material3.Switch
 import com.hdpwd.shared.sync.S3CredentialVault
 import com.hdpwd.shared.sync.S3Credentials
 import com.hdpwd.shared.sync.S3TargetService
@@ -137,58 +141,114 @@ fun PasswordManagerApp(
             clipboard?.let { SensitiveClipboardController(clipboardScope, it) }
         }
         var bootstrapped by remember { mutableStateOf(repository == null) }
+        var deviceLock by remember { mutableStateOf<DeviceLockRecord?>(null) }
+        var deviceBiometricSealed by remember { mutableStateOf<ByteArray?>(null) }
+        var pendingAuth by remember { mutableStateOf<PendingAuth?>(null) }
 
         LaunchedEffect(repository) {
             val repo = repository ?: return@LaunchedEffect
-            if (users.isNotEmpty()) {
+            if (users.isNotEmpty() || deviceLock != null) {
                 bootstrapped = true
                 return@LaunchedEffect
             }
             runCatching {
+                deviceLock = repo.readDeviceLock()
+                deviceBiometricSealed = repo.readDeviceBiometricSealed()
                 repo.listUsers()
                     .distinctBy { it.id }
-                    .mapNotNull { meta ->
-                        val envelope = repo.readEnvelope(meta.id) ?: return@mapNotNull null
-                        val sealed = if (meta.hasBiometric) repo.readBiometricSealed(meta.id) else null
+                    .map { meta ->
+                        val envelope = repo.readEnvelope(meta.id) ?: UserRecoveryEnvelope(
+                            encryptedRecoveryPassword = byteArrayOf(),
+                        )
                         UserSummary(
                             id = EntityId(meta.id),
                             name = meta.username,
                             vault = VaultState(EntityId(meta.id)),
-                            localEnvelope = envelope,
-                            hasBiometric = meta.hasBiometric && sealed != null,
-                            biometricSealed = sealed,
+                            recoveryEnvelope = envelope,
                         )
                     }
             }.onSuccess { loaded ->
                 users.clear()
                 users.addAll(loaded)
-                // 修复历史重复 id 写入的损坏索引
                 if (repo.listUsers().size != loaded.size) {
                     repo.saveUsers(
                         loaded.map {
-                            PersistedUserMeta(
-                                id = it.id.value,
-                                username = it.name,
-                                hasBiometric = it.hasBiometric && it.biometricSealed != null,
-                            )
+                            PersistedUserMeta(id = it.id.value, username = it.name)
                         },
                     )
                 }
             }
             bootstrapped = true
+            if (deviceLock == null) {
+                screen = AppScreen.SETUP_DEVICE
+            }
         }
 
         suspend fun persistIndex() {
             val repo = repository ?: return
             repo.saveUsers(
-                users.map {
-                    PersistedUserMeta(
-                        id = it.id.value,
-                        username = it.name,
-                        hasBiometric = it.hasBiometric && it.biometricSealed != null,
-                    )
-                },
+                users.map { PersistedUserMeta(id = it.id.value, username = it.name) },
             )
+        }
+
+        suspend fun openVault(user: UserSummary): Boolean {
+            val lock = deviceLock ?: return false
+            val permit = session.acquire(OperationPurpose.GENERATE_PASSWORD)
+                ?: return false
+            return try {
+                session.withEnvelopeKeySuspending(permit) { deviceKey ->
+                    val vault = envelopeService.withRecoveryPassword(
+                        user.recoveryEnvelope,
+                        deviceKey,
+                        user.id.value,
+                        lock.generation,
+                    ) { recoveryPassword ->
+                        repository?.readVault(user.id.value, recoveryPassword) ?: user.vault
+                    }
+                    val index = users.indexOfFirst { it.id == user.id }
+                    val updated = user.copy(vault = vault)
+                    if (index >= 0) users[index] = updated
+                    selectedUser = updated
+                    screen = AppScreen.VAULT
+                }
+                true
+            } catch (_: Throwable) {
+                false
+            } finally {
+                permit.close()
+            }
+        }
+
+        fun requestCreateUser() {
+            if (session.canStart()) {
+                screen = AppScreen.CREATE_USER
+            } else {
+                pendingAuth = PendingAuth.CREATE_USER
+            }
+        }
+
+        fun requestOpenUser(user: UserSummary) {
+            val lock = deviceLock
+            if (lock == null) {
+                screen = AppScreen.SETUP_DEVICE
+                return
+            }
+            if (user.recoveryEnvelope.needsRebind(lock.generation)) {
+                selectedUser = user
+                screen = AppScreen.REBIND_USER
+                return
+            }
+            clipboardScope.launch {
+                if (session.canStart()) {
+                    if (!openVault(user)) {
+                        pendingAuth = PendingAuth.OPEN_USER
+                        selectedUser = user
+                    }
+                } else {
+                    selectedUser = user
+                    pendingAuth = PendingAuth.OPEN_USER
+                }
+            }
         }
 
         if (!bootstrapped) {
@@ -198,22 +258,84 @@ fun PasswordManagerApp(
             return@MaterialTheme
         }
 
+        pendingAuth?.let { auth ->
+            DeviceAuthDialog(
+                deviceLock = deviceLock,
+                users = users,
+                biometric = biometric,
+                biometricSealed = deviceBiometricSealed,
+                envelopeService = envelopeService,
+                repository = repository,
+                session = session,
+                startForgot = auth == PendingAuth.FORGOT_RESET,
+                onDismiss = { pendingAuth = null },
+                onUnlocked = {
+                    val action = pendingAuth
+                    pendingAuth = null
+                    clipboardScope.launch {
+                        when (action) {
+                            PendingAuth.CREATE_USER -> screen = AppScreen.CREATE_USER
+                            PendingAuth.OPEN_USER -> selectedUser?.let { openVault(it) }
+                            PendingAuth.RESUME_SETTINGS -> screen = AppScreen.DEVICE_SETTINGS
+                            PendingAuth.FORGOT_RESET -> screen = AppScreen.USERS
+                            null -> Unit
+                        }
+                    }
+                },
+                onDeviceLockChanged = { record, sealed ->
+                    deviceLock = record
+                    deviceBiometricSealed = sealed
+                    clipboardScope.launch {
+                        users.forEachIndexed { index, user ->
+                            val env = repository?.readEnvelope(user.id.value)
+                            if (env != null) users[index] = user.copy(recoveryEnvelope = env)
+                        }
+                    }
+                },
+            )
+        }
+
         when (screen) {
+            AppScreen.SETUP_DEVICE -> SetupDeviceScreen(
+                envelopeService = envelopeService,
+                biometric = biometric,
+                repository = repository,
+                session = session,
+                onReady = { record, sealed ->
+                    deviceLock = record
+                    deviceBiometricSealed = sealed
+                    screen = AppScreen.USERS
+                },
+            )
             AppScreen.USERS -> UserListScreen(
                 users = users,
-                onCreate = { screen = AppScreen.CREATE_USER },
-                onSelect = {
-                    selectedUser = it
-                    screen = AppScreen.UNLOCK
+                deviceGeneration = deviceLock?.generation,
+                onCreate = { requestCreateUser() },
+                onSettings = { screen = AppScreen.DEVICE_SETTINGS },
+                onSelect = { requestOpenUser(it) },
+            )
+            AppScreen.DEVICE_SETTINGS -> DeviceSettingsScreen(
+                deviceLock = deviceLock,
+                biometric = biometric,
+                biometricSealed = deviceBiometricSealed,
+                envelopeService = envelopeService,
+                repository = repository,
+                session = session,
+                onBack = { screen = AppScreen.USERS },
+                onDeviceLockChanged = { record, sealed ->
+                    deviceLock = record
+                    deviceBiometricSealed = sealed
                 },
+                onNeedAuth = { pendingAuth = PendingAuth.RESUME_SETTINGS },
+                onForgotPassword = { pendingAuth = PendingAuth.FORGOT_RESET },
             )
             AppScreen.CREATE_USER -> CreateUserScreen(
                 existingNames = users.map { it.name }.toSet(),
                 envelopeService = envelopeService,
                 session = session,
                 repository = repository,
-                biometric = biometric,
                 backupFiles = backupFiles,
+                deviceGeneration = deviceLock?.generation ?: "",
                 onCancel = { screen = AppScreen.USERS },
                 onCreated = { summary ->
                     users += summary
@@ -221,20 +343,19 @@ fun PasswordManagerApp(
                     screen = AppScreen.VAULT
                 },
             )
-            AppScreen.UNLOCK -> selectedUser?.let { user ->
-                UnlockUserScreen(
+            AppScreen.REBIND_USER -> selectedUser?.let { user ->
+                RebindUserScreen(
                     user = user,
+                    deviceLock = deviceLock,
                     envelopeService = envelopeService,
                     session = session,
                     repository = repository,
-                    biometric = biometric,
                     onCancel = {
                         selectedUser = null
                         screen = AppScreen.USERS
                     },
-                    onUnlocked = { vault ->
+                    onRebound = { updated ->
                         val index = users.indexOfFirst { it.id == user.id }
-                        val updated = user.copy(vault = vault)
                         if (index >= 0) users[index] = updated
                         selectedUser = updated
                         screen = AppScreen.VAULT
@@ -249,6 +370,7 @@ fun PasswordManagerApp(
                     clipboardController = clipboardController,
                     repository = repository,
                     backupFiles = backupFiles,
+                    deviceGeneration = deviceLock?.generation ?: "",
                     onVaultChanged = { updated ->
                         val index = users.indexOfFirst { it.id == user.id }
                         if (index >= 0) {
@@ -261,18 +383,18 @@ fun PasswordManagerApp(
                             repository?.deleteUser(user.id.value)
                             users.removeAll { it.id == user.id }
                             persistIndex()
-                            session.clear()
                             selectedUser = null
                             screen = AppScreen.USERS
                         }
                     },
                     onAuthExpired = {
                         session.clear()
-                        screen = AppScreen.UNLOCK
+                        selectedUser = null
+                        onPendingChangesChanged(false)
+                        screen = AppScreen.USERS
                     },
                     onPendingChangesChanged = onPendingChangesChanged,
                     onBack = {
-                        session.clear()
                         selectedUser = null
                         onPendingChangesChanged(false)
                         screen = AppScreen.USERS
@@ -284,25 +406,34 @@ fun PasswordManagerApp(
 }
 
 private enum class AppScreen {
+    SETUP_DEVICE,
     USERS,
+    DEVICE_SETTINGS,
     CREATE_USER,
-    UNLOCK,
+    REBIND_USER,
     VAULT,
+}
+
+private enum class PendingAuth {
+    CREATE_USER,
+    OPEN_USER,
+    RESUME_SETTINGS,
+    FORGOT_RESET,
 }
 
 private data class UserSummary(
     val id: EntityId,
     val name: String,
     val vault: VaultState,
-    val localEnvelope: LocalEnvelopeRecord,
-    val hasBiometric: Boolean = false,
-    val biometricSealed: ByteArray? = null,
+    val recoveryEnvelope: UserRecoveryEnvelope,
 )
 
 @Composable
 private fun UserListScreen(
     users: List<UserSummary>,
+    deviceGeneration: String?,
     onCreate: () -> Unit,
+    onSettings: () -> Unit,
     onSelect: (UserSummary) -> Unit,
 ) {
     SafeScreen(
@@ -316,19 +447,30 @@ private fun UserListScreen(
             modifier = Modifier.fillMaxSize().padding(padding).padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text("hd-pwd", style = MaterialTheme.typography.headlineMedium)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("hd-pwd", style = MaterialTheme.typography.headlineMedium)
+                IconButton(onClick = onSettings) {
+                    Icon(Icons.Filled.Settings, contentDescription = "设备设置")
+                }
+            }
             Text("本地用户", style = MaterialTheme.typography.titleMedium)
-            Text("选择用户以验证并进入密码库")
+            Text("用户列表无需验证。打开用户或创建用户时才会加解密。")
             if (users.isEmpty()) {
                 Text("当前设备还没有用户，点击右下角创建或导入")
             } else {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(users, key = { "${it.id.value}:${it.name}" }) { user ->
+                        val unbound = deviceGeneration == null ||
+                            user.recoveryEnvelope.needsRebind(deviceGeneration)
                         Card(onClick = { onSelect(user) }, modifier = Modifier.fillMaxWidth()) {
                             Column(modifier = Modifier.padding(16.dp)) {
                                 Text(user.name)
-                                if (user.hasBiometric) {
-                                    Text("已启用生物识别", style = MaterialTheme.typography.labelSmall)
+                                if (unbound) {
+                                    Text("待用恢复密码重新绑定", style = MaterialTheme.typography.labelSmall)
                                 }
                             }
                         }
@@ -340,27 +482,376 @@ private fun UserListScreen(
 }
 
 @Composable
+private fun SetupDeviceScreen(
+    envelopeService: LocalEnvelopeService,
+    biometric: BiometricProvider,
+    repository: LocalAppRepository?,
+    session: AuthorizationSession,
+    onReady: (DeviceLockRecord, ByteArray?) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var password by remember { mutableStateOf("") }
+    var confirm by remember { mutableStateOf("") }
+    var enableBiometric by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val biometricAvailable = biometric.availability() == BiometricAvailability.AVAILABLE
+
+    SafeContent {
+        Column(
+            modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text("设置设备主密码", style = MaterialTheme.typography.headlineSmall)
+            Text("这台设备只用一把主密码解开本地缓存的恢复密码。用户列表本身不会上锁。")
+            SensitivePasswordField(password, { password = it }, "设备主密码")
+            SensitivePasswordField(confirm, { confirm = it }, "确认主密码")
+            if (biometricAvailable) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = enableBiometric, onCheckedChange = { enableBiometric = it })
+                    Text("启用生物识别（后续验证默认使用）")
+                }
+            }
+            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            Button(
+                onClick = {
+                    error = when {
+                        password.isBlank() -> "主密码不能为空"
+                        password != confirm -> "两次输入的主密码不一致"
+                        else -> null
+                    }
+                    if (error != null) return@Button
+                    scope.launch {
+                        try {
+                            val created = envelopeService.createDeviceLock(password)
+                            var record = created.record
+                            var sealed: ByteArray? = null
+                            if (enableBiometric && biometricAvailable) {
+                                val keyBytes = created.deviceKey.use { it.copyOf() }
+                                try {
+                                    sealed = biometric.seal(DeviceBiometric.LABEL, keyBytes)
+                                    record = record.copy(preferBiometric = true)
+                                } catch (ex: Throwable) {
+                                    error = "生物识别启用失败：${UserFacingText.fromThrowable(ex, "未知错误")}。可先跳过，稍后在设置中开启。"
+                                    sealed = null
+                                    record = record.copy(preferBiometric = false)
+                                } finally {
+                                    keyBytes.fill(0)
+                                }
+                            }
+                            repository?.writeDeviceLock(record)
+                            repository?.writeDeviceBiometricSealed(sealed)
+                            session.open(created.deviceKey)
+                            onReady(record, sealed)
+                            password = ""
+                            confirm = ""
+                        } catch (ex: Throwable) {
+                            error = UserFacingText.fromThrowable(ex, "设置设备锁失败")
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("完成")
+            }
+        }
+    }
+}
+
+@Composable
+private fun DeviceSettingsScreen(
+    deviceLock: DeviceLockRecord?,
+    biometric: BiometricProvider,
+    biometricSealed: ByteArray?,
+    envelopeService: LocalEnvelopeService,
+    repository: LocalAppRepository?,
+    session: AuthorizationSession,
+    onBack: () -> Unit,
+    onDeviceLockChanged: (DeviceLockRecord, ByteArray?) -> Unit,
+    onNeedAuth: () -> Unit,
+    onForgotPassword: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var newPassword by remember { mutableStateOf("") }
+    var confirm by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    var message by remember { mutableStateOf<String?>(null) }
+    val biometricAvailable = biometric.availability() == BiometricAvailability.AVAILABLE
+    val preferBiometric = deviceLock?.preferBiometric == true && biometricSealed != null
+
+    SafeContent {
+        Column(
+            modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            EditorTopBar(title = "设备设置", onClose = onBack)
+            if (biometricAvailable) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("生物识别解锁")
+                    Switch(
+                        checked = preferBiometric,
+                        onCheckedChange = { enabled ->
+                            scope.launch {
+                                val lock = deviceLock ?: return@launch
+                                if (!session.canStart()) {
+                                    onNeedAuth()
+                                    return@launch
+                                }
+                                try {
+                                    if (enabled) {
+                                        val permit = session.acquire(OperationPurpose.DEVICE_SETTINGS)
+                                            ?: error("授权已失效")
+                                        try {
+                                            session.withEnvelopeKeySuspending(permit) { key ->
+                                                val bytes = key.use { it.copyOf() }
+                                                try {
+                                                    val sealed = biometric.seal(DeviceBiometric.LABEL, bytes)
+                                                    val next = lock.copy(preferBiometric = true)
+                                                    repository?.writeDeviceLock(next)
+                                                    repository?.writeDeviceBiometricSealed(sealed)
+                                                    onDeviceLockChanged(next, sealed)
+                                                } finally {
+                                                    bytes.fill(0)
+                                                }
+                                            }
+                                        } finally {
+                                            permit.close()
+                                        }
+                                    } else {
+                                        biometric.delete(DeviceBiometric.LABEL)
+                                        val next = lock.copy(preferBiometric = false)
+                                        repository?.writeDeviceLock(next)
+                                        repository?.writeDeviceBiometricSealed(null)
+                                        onDeviceLockChanged(next, null)
+                                    }
+                                    message = "已更新生物识别"
+                                    error = null
+                                } catch (ex: Throwable) {
+                                    error = UserFacingText.fromThrowable(ex, "更新生物识别失败")
+                                }
+                            }
+                        },
+                    )
+                }
+            }
+            Text("修改主密码", style = MaterialTheme.typography.titleMedium)
+            Text("能通过生物识别或当前主密码解开即可设置新密码，不会让其他用户掉绑。")
+            SensitivePasswordField(newPassword, { newPassword = it }, "新主密码")
+            SensitivePasswordField(confirm, { confirm = it }, "确认新主密码")
+            Button(onClick = {
+                error = when {
+                    newPassword.isBlank() -> "新主密码不能为空"
+                    newPassword != confirm -> "两次输入的主密码不一致"
+                    else -> null
+                }
+                if (error != null) return@Button
+                if (!session.canStart()) {
+                    onNeedAuth()
+                    return@Button
+                }
+                val lock = deviceLock ?: return@Button
+                scope.launch {
+                    val permit = session.acquire(OperationPurpose.DEVICE_SETTINGS)
+                    if (permit == null) {
+                        onNeedAuth()
+                        return@launch
+                    }
+                    try {
+                        session.withEnvelopeKeySuspending(permit) { key ->
+                            val rewrapped = envelopeService.rewrapMasterPassword(lock, key, newPassword)
+                            var sealed = biometricSealed
+                            if (rewrapped.preferBiometric && biometricAvailable) {
+                                val bytes = key.use { it.copyOf() }
+                                try {
+                                    sealed = biometric.seal(DeviceBiometric.LABEL, bytes)
+                                } finally {
+                                    bytes.fill(0)
+                                }
+                            }
+                            repository?.writeDeviceLock(rewrapped)
+                            repository?.writeDeviceBiometricSealed(sealed)
+                            onDeviceLockChanged(rewrapped, sealed)
+                        }
+                        message = "主密码已更新"
+                        newPassword = ""
+                        confirm = ""
+                        error = null
+                    } catch (ex: Throwable) {
+                        error = UserFacingText.fromThrowable(ex, "修改主密码失败")
+                    } finally {
+                        permit.close()
+                    }
+                }
+            }) { Text("保存新主密码") }
+            Text("忘记主密码", style = MaterialTheme.typography.titleMedium)
+            Text("将轮换设备钥匙，只有当时用恢复密码验证成功的用户保持绑定。")
+            OutlinedButton(onClick = onForgotPassword, modifier = Modifier.fillMaxWidth()) {
+                Text("用恢复密码重置设备锁")
+            }
+            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            message?.let { Text(it) }
+        }
+    }
+}
+
+@Composable
+private fun DeviceAuthDialog(
+    deviceLock: DeviceLockRecord?,
+    users: List<UserSummary>,
+    biometric: BiometricProvider,
+    biometricSealed: ByteArray?,
+    envelopeService: LocalEnvelopeService,
+    repository: LocalAppRepository?,
+    session: AuthorizationSession,
+    startForgot: Boolean = false,
+    onDismiss: () -> Unit,
+    onUnlocked: () -> Unit,
+    onDeviceLockChanged: (DeviceLockRecord, ByteArray?) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var password by remember { mutableStateOf("") }
+    var usePassword by remember { mutableStateOf(false) }
+    var forgot by remember { mutableStateOf(startForgot) }
+    var recoveryPassword by remember { mutableStateOf("") }
+    var selectedResetUser by remember { mutableStateOf(users.firstOrNull()?.id) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var working by remember { mutableStateOf(false) }
+    val autoBiometric = DeviceUnlockPreference.shouldAutoPromptBiometric(
+        preferBiometric = deviceLock?.preferBiometric == true,
+        availability = biometric.availability(),
+        hasSealedBlob = biometricSealed != null,
+    )
+
+    suspend fun finish(key: LocalEnvelopeKey) {
+        session.open(key)
+        password = ""
+        recoveryPassword = ""
+        onUnlocked()
+    }
+
+    suspend fun unlockByBiometric() {
+        require(deviceLock != null) { "尚未设置设备锁" }
+        val sealed = biometricSealed ?: error("没有生物识别封装")
+        val opened = biometric.open(DeviceBiometric.LABEL, sealed)
+        finish(LocalEnvelopeKey(opened))
+    }
+
+    LaunchedEffect(autoBiometric) {
+        if (autoBiometric && !usePassword && !forgot) {
+            working = true
+            try {
+                unlockByBiometric()
+            } catch (_: Throwable) {
+                usePassword = true
+                error = "生物识别失败，请改用主密码"
+            } finally {
+                working = false
+            }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (forgot) "用恢复密码重置设备锁" else "设备验证") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (forgot) {
+                    Text("选择一个本地用户并输入其恢复密码。其他用户将变为待重绑。")
+                    users.forEach { user ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(
+                                checked = selectedResetUser == user.id,
+                                onCheckedChange = { selectedResetUser = user.id },
+                            )
+                            Text(user.name)
+                        }
+                    }
+                    SensitivePasswordField(recoveryPassword, { recoveryPassword = it }, "该用户的恢复密码")
+                    SensitivePasswordField(password, { password = it }, "新设备主密码")
+                } else if (usePassword || !autoBiometric) {
+                    SensitivePasswordField(password, { password = it }, "设备主密码")
+                    TextButton(onClick = { forgot = true }) { Text("忘记主密码") }
+                    if (autoBiometric) {
+                        TextButton(onClick = { usePassword = false; error = null }) {
+                            Text("改用生物识别")
+                        }
+                    }
+                } else {
+                    Text("正在请求生物识别…")
+                    TextButton(onClick = { usePassword = true }) { Text("使用主密码") }
+                }
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    scope.launch {
+                        working = true
+                        try {
+                            if (forgot) {
+                                val user = users.firstOrNull { it.id == selectedResetUser }
+                                    ?: error("请选择用户")
+                                require(password.isNotBlank()) { "新主密码不能为空" }
+                                repository?.authenticateVault(user.id.value, recoveryPassword)
+                                val rotated = envelopeService.rotateDeviceLock(password)
+                                val rebound = envelopeService.sealRecoveryPassword(
+                                    rotated.deviceKey,
+                                    rotated.record.generation,
+                                    user.id.value,
+                                    recoveryPassword,
+                                )
+                                repository?.writeDeviceLock(rotated.record)
+                                repository?.writeDeviceBiometricSealed(null)
+                                repository?.writeEnvelope(user.id.value, rebound)
+                                biometric.delete(DeviceBiometric.LABEL)
+                                onDeviceLockChanged(rotated.record, null)
+                                session.open(rotated.deviceKey)
+                                onUnlocked()
+                            } else if (usePassword || !autoBiometric) {
+                                val lock = deviceLock ?: error("尚未设置设备锁")
+                                val key = envelopeService.unlockWithMasterPassword(lock, password)
+                                finish(key)
+                            } else {
+                                unlockByBiometric()
+                            }
+                            error = null
+                        } catch (ex: Throwable) {
+                            error = UserFacingText.fromThrowable(ex, "验证失败")
+                        } finally {
+                            working = false
+                        }
+                    }
+                },
+                enabled = !working,
+            ) { Text(if (forgot) "重置" else "验证") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        },
+    )
+}
+
+@Composable
 private fun CreateUserScreen(
     existingNames: Set<String>,
     envelopeService: LocalEnvelopeService,
     session: AuthorizationSession,
     repository: LocalAppRepository?,
-    biometric: BiometricProvider,
     backupFiles: BackupFilePort,
+    deviceGeneration: String,
     onCancel: () -> Unit,
     onCreated: (UserSummary) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var name by remember { mutableStateOf("") }
     var recoveryPassword by remember { mutableStateOf("") }
-    var localPassword by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var importBytes by remember { mutableStateOf<ByteArray?>(null) }
     var importLabel by remember { mutableStateOf<String?>(null) }
-    var enableBiometric by remember { mutableStateOf(false) }
-    val biometricAvailable = remember(biometric) {
-        biometric.availability() == BiometricAvailability.AVAILABLE
-    }
     val backupService = remember { BackupService.production(platformCryptoProvider()) }
 
     SafeContent {
@@ -380,11 +871,6 @@ private fun CreateUserScreen(
                 value = recoveryPassword,
                 onValueChange = { recoveryPassword = it },
                 label = "恢复密码",
-            )
-            SensitivePasswordField(
-                value = localPassword,
-                onValueChange = { localPassword = it },
-                label = "本机主密码",
             )
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -411,12 +897,6 @@ private fun CreateUserScreen(
                 }
             }
             importLabel?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-            if (biometricAvailable) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(checked = enableBiometric, onCheckedChange = { enableBiometric = it })
-                    Text("启用生物识别解锁")
-                }
-            }
             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton(onClick = onCancel) { Text("取消") }
@@ -425,71 +905,61 @@ private fun CreateUserScreen(
                         name.isBlank() -> "用户名不能为空"
                         name in existingNames -> "用户名已存在"
                         recoveryPassword.isBlank() -> "恢复密码不能为空"
-                        localPassword.isBlank() -> "本机主密码不能为空"
+                        !session.canStart() -> "需要先通过设备验证"
                         else -> null
                     }
                     if (error == null) {
                         scope.launch {
+                            val permit = session.acquire(OperationPurpose.CREATE_USER)
+                            if (permit == null) {
+                                error = "需要先通过设备验证"
+                                return@launch
+                            }
+                            var createdId: String? = null
                             try {
                                 val importedVault = importBytes?.let {
                                     backupService.import(recoveryPassword, it)
                                 }
-                                // 本机用户 id 必须唯一；导入备份时不能复用 vaultId，否则重复导入会让 LazyColumn 因 key 冲突闪退
                                 val id = EntityId(
                                     platformCryptoProvider().randomBytes(16)
                                         .joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') },
                                 )
-                                // 创建用户时主动导入的备份含 S3 配置：视为本机确认，进入密码库后立即同步
+                                createdId = id.value
                                 val vault = importedVault?.let { imported ->
                                     SyncTargetApprovalService()
                                         .activateLocalBackupTargets(imported.copy(vaultId = id))
                                 } ?: VaultState(id)
-                                val envelope = envelopeService.create(recoveryPassword, localPassword)
-                                val localKey = envelopeService.unlockLocalKey(envelope, localPassword)
-                                var sealed: ByteArray? = null
-                                var hasBio = false
-                                if (enableBiometric && biometricAvailable) {
-                                    val keyBytes = localKey.use { it.copyOf() }
-                                    try {
-                                        sealed = biometric.seal(id.value, keyBytes)
-                                        hasBio = true
-                                    } catch (ex: Throwable) {
-                                        sealed = null
-                                        hasBio = false
-                                        error = "生物识别启用失败：${UserFacingText.fromThrowable(ex, "未知错误")}。请取消勾选后重试，或检查系统是否已录入指纹/面容。"
-                                        return@launch
-                                    } finally {
-                                        keyBytes.fill(0)
+                                session.withEnvelopeKeySuspending(permit) { deviceKey ->
+                                    val envelope = envelopeService.sealRecoveryPassword(
+                                        deviceKey,
+                                        deviceGeneration,
+                                        id.value,
+                                        recoveryPassword,
+                                    )
+                                    repository?.writeEnvelope(id.value, envelope)
+                                    repository?.writeVault(id.value, recoveryPassword, vault)
+                                    repository?.let { repo ->
+                                        val metas = (repo.listUsers() + PersistedUserMeta(
+                                            id = id.value,
+                                            username = name,
+                                        )).distinctBy { it.id }
+                                        repo.saveUsers(metas)
                                     }
+                                    onCreated(
+                                        UserSummary(
+                                            id = id,
+                                            name = name,
+                                            vault = vault,
+                                            recoveryEnvelope = envelope,
+                                        ),
+                                    )
                                 }
-                                repository?.writeEnvelope(id.value, envelope)
-                                repository?.writeVault(id.value, recoveryPassword, vault)
-                                if (hasBio && sealed != null) {
-                                    repository?.writeBiometricSealed(id.value, sealed)
-                                }
-                                repository?.let { repo ->
-                                    val metas = (repo.listUsers() + PersistedUserMeta(
-                                        id = id.value,
-                                        username = name,
-                                        hasBiometric = hasBio,
-                                    )).distinctBy { it.id }
-                                    repo.saveUsers(metas)
-                                }
-                                session.open(localKey)
-                                onCreated(
-                                    UserSummary(
-                                        id = id,
-                                        name = name,
-                                        vault = vault,
-                                        localEnvelope = envelope,
-                                        hasBiometric = hasBio,
-                                        biometricSealed = sealed,
-                                    ),
-                                )
                                 recoveryPassword = ""
-                                localPassword = ""
                             } catch (ex: Throwable) {
+                                createdId?.let { runCatching { repository?.deleteUser(it) } }
                                 error = UserFacingText.fromThrowable(ex, "创建失败：请检查恢复密码是否正确")
+                            } finally {
+                                permit.close()
                             }
                         }
                     }
@@ -502,93 +972,95 @@ private fun CreateUserScreen(
 }
 
 @Composable
-private fun UnlockUserScreen(
+private fun RebindUserScreen(
     user: UserSummary,
+    deviceLock: DeviceLockRecord?,
     envelopeService: LocalEnvelopeService,
     session: AuthorizationSession,
     repository: LocalAppRepository?,
-    biometric: BiometricProvider,
     onCancel: () -> Unit,
-    onUnlocked: (VaultState) -> Unit,
+    onRebound: (UserSummary) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    var localPassword by remember { mutableStateOf("") }
+    var recoveryPassword by remember { mutableStateOf("") }
+    var oldLocalPassword by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
-    var unlocking by remember { mutableStateOf(false) }
-    val canBiometric = user.hasBiometric &&
-        user.biometricSealed != null &&
-        biometric.availability() == BiometricAvailability.AVAILABLE
-
-    suspend fun finishWithKey(key: LocalEnvelopeKey) {
-        session.open(key)
-        val vault = try {
-            envelopeService.withRecoveryPassword(user.localEnvelope, key) { recoveryPassword ->
-                repository?.readVault(user.id.value, recoveryPassword) ?: user.vault
-            }
-        } catch (_: Throwable) {
-            user.vault
-        }
-        localPassword = ""
-        error = null
-        onUnlocked(vault)
-    }
+    val lock = deviceLock
+    val legacy = user.recoveryEnvelope.isLegacy()
 
     SafeContent {
         Column(
             modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            EditorTopBar(title = "验证 ${user.name}", onClose = onCancel)
-            Text("可使用生物识别或本机主密码验证")
-            if (canBiometric) {
-                Button(
-                    onClick = {
-                        scope.launch {
-                            unlocking = true
-                            try {
-                                val sealed = user.biometricSealed!!
-                                val opened = biometric.open(user.id.value, sealed)
-                                finishWithKey(LocalEnvelopeKey(opened))
-                            } catch (_: Throwable) {
-                                error = "生物识别失败，请改用本机主密码"
-                            } finally {
-                                unlocking = false
-                            }
-                        }
-                    },
-                    enabled = !unlocking,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("使用生物识别解锁")
-                }
+            EditorTopBar(title = "重新绑定 ${user.name}", onClose = onCancel)
+            Text("该用户尚未绑定当前设备锁。请输入恢复密码（旧数据也可用原来的本机主密码）。")
+            SensitivePasswordField(recoveryPassword, { recoveryPassword = it }, "恢复密码")
+            if (legacy) {
+                SensitivePasswordField(oldLocalPassword, { oldLocalPassword = it }, "旧本机主密码（可选）")
             }
-            SensitivePasswordField(
-                value = localPassword,
-                onValueChange = { localPassword = it },
-                label = "本机主密码",
-            )
             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton(onClick = onCancel) { Text("取消") }
-                Button(
-                    onClick = {
-                        scope.launch {
-                            unlocking = true
-                            try {
-                                val key = envelopeService.unlockLocalKey(user.localEnvelope, localPassword)
-                                finishWithKey(key)
-                            } catch (ex: Throwable) {
-                                localPassword = ""
-                                error = UserFacingText.fromThrowable(ex, "本机主密码错误")
-                            } finally {
-                                unlocking = false
-                            }
+                Button(onClick = {
+                    if (lock == null) {
+                        error = "尚未设置设备锁"
+                        return@Button
+                    }
+                    if (!session.canStart()) {
+                        error = "需要先通过设备验证"
+                        return@Button
+                    }
+                    scope.launch {
+                        val permit = session.acquire(OperationPurpose.CREATE_USER)
+                            ?: session.acquire(OperationPurpose.DEVICE_SETTINGS)
+                        if (permit == null) {
+                            error = "需要先通过设备验证"
+                            return@launch
                         }
-                    },
-                    enabled = !unlocking,
-                ) {
-                    Text("验证")
-                }
+                        try {
+                            val recovered = when {
+                                recoveryPassword.isNotBlank() -> {
+                                    repository?.authenticateVault(user.id.value, recoveryPassword)
+                                    recoveryPassword
+                                }
+                                legacy && oldLocalPassword.isNotBlank() -> {
+                                    val legacyKey = envelopeService.unlockLegacyLocalKey(
+                                        user.recoveryEnvelope,
+                                        oldLocalPassword,
+                                    )
+                                    try {
+                                        envelopeService.withLegacyRecoveryPassword(
+                                            user.recoveryEnvelope,
+                                            legacyKey,
+                                        ) { it.toString() }
+                                    } finally {
+                                        legacyKey.clear()
+                                    }
+                                }
+                                else -> {
+                                    error = "请输入恢复密码"
+                                    return@launch
+                                }
+                            }
+                            session.withEnvelopeKeySuspending(permit) { deviceKey ->
+                                val envelope = envelopeService.sealRecoveryPassword(
+                                    deviceKey,
+                                    lock.generation,
+                                    user.id.value,
+                                    recovered,
+                                )
+                                val vault = repository?.readVault(user.id.value, recovered) ?: user.vault
+                                repository?.writeEnvelope(user.id.value, envelope)
+                                onRebound(user.copy(vault = vault, recoveryEnvelope = envelope))
+                            }
+                        } catch (ex: Throwable) {
+                            error = UserFacingText.fromThrowable(ex, "绑定失败")
+                        } finally {
+                            permit.close()
+                        }
+                    }
+                }) { Text("绑定并进入") }
             }
         }
     }
@@ -602,6 +1074,7 @@ private fun VaultScreen(
     clipboardController: SensitiveClipboardController?,
     repository: LocalAppRepository?,
     backupFiles: BackupFilePort,
+    deviceGeneration: String,
     onVaultChanged: (VaultState) -> Unit,
     onUserDeleted: () -> Unit,
     onAuthExpired: () -> Unit,
@@ -723,8 +1196,10 @@ private fun VaultScreen(
         return try {
             session.withEnvelopeKeySuspending(permit) { envelopeKey ->
                 envelopeService.withRecoveryPassword(
-                    user.localEnvelope,
+                    user.recoveryEnvelope,
                     envelopeKey,
+                    user.id.value,
+                    deviceGeneration,
                 ) { recoveryPassword ->
                     block(recoveryPassword)
                 }
@@ -1123,7 +1598,9 @@ private fun VaultScreen(
                                 val bytes = backupService.exportWithAuthorization(
                                     session = session,
                                     localEnvelopeService = envelopeService,
-                                    localEnvelope = user.localEnvelope,
+                                    recoveryEnvelope = user.recoveryEnvelope,
+                                    userId = user.id.value,
+                                    deviceGeneration = deviceGeneration,
                                     vault = vault,
                                 )
                                 val name = BackupNaming.fileName(

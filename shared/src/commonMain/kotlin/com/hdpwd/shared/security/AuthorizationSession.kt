@@ -9,10 +9,14 @@ enum class OperationPurpose {
     IMPORT_BACKUP,
     SYNC,
     CHANGE_RECOVERY_PASSWORD,
+    CREATE_USER,
+    DEVICE_SETTINGS,
 }
 
 /**
  * 五分钟绝对授权会话和操作许可管理器。
+ *
+ * 会话只缓存 DeviceLEK；返回用户列表不得因此调用 [clear]，到期才清除密钥。
  */
 class AuthorizationSession(
     private val clock: () -> Long,

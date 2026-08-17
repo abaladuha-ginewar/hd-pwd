@@ -5,9 +5,9 @@ import com.hdpwd.shared.domain.VaultValidator
 import com.hdpwd.shared.crypto.CryptoDomains
 import com.hdpwd.shared.crypto.CryptoProvider
 import com.hdpwd.shared.security.AuthorizationSession
-import com.hdpwd.shared.security.LocalEnvelopeRecord
 import com.hdpwd.shared.security.LocalEnvelopeService
 import com.hdpwd.shared.security.OperationPurpose
+import com.hdpwd.shared.security.UserRecoveryEnvelope
 
 /**
  * 自包含加密 `.dat` 备份服务。
@@ -30,14 +30,21 @@ class BackupService(
     suspend fun exportWithAuthorization(
         session: AuthorizationSession,
         localEnvelopeService: LocalEnvelopeService,
-        localEnvelope: LocalEnvelopeRecord,
+        recoveryEnvelope: UserRecoveryEnvelope,
+        userId: String,
+        deviceGeneration: String,
         vault: VaultState,
     ): ByteArray {
         val permit = session.acquire(OperationPurpose.EXPORT_BACKUP)
             ?: error("授权会话已失效")
         return try {
             session.withEnvelopeKeySuspending(permit) { envelopeKey ->
-                localEnvelopeService.withRecoveryPassword(localEnvelope, envelopeKey) { recoveryPassword ->
+                localEnvelopeService.withRecoveryPassword(
+                    envelope = recoveryEnvelope,
+                    deviceKey = envelopeKey,
+                    userId = userId,
+                    currentGeneration = deviceGeneration,
+                ) { recoveryPassword ->
                     export(recoveryPassword, vault)
                 }
             }

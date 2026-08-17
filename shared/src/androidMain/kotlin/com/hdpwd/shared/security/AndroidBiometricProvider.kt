@@ -19,7 +19,7 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 /**
- * Android Strong Biometric + Keystore 的 LEK 封装实现。
+ * Android Strong Biometric + Keystore 的 DeviceLEK 封装实现。
  */
 class AndroidBiometricProvider(
     private val activity: FragmentActivity,
