@@ -15,7 +15,7 @@
 
 ## 构建
 
-本项目不要求在宿主机安装 JDK、Gradle 或 Android Studio。Docker 构建容器包含 JDK/Gradle，Android 构建容器包含 Android SDK。
+本项目不要求在宿主机安装 JDK、Gradle 或 Android Studio。Docker 构建容器包含 JDK/Gradle，Android 构建容器包含 Android SDK。Windows MSI 除外，必须在 Windows 本机打包，见下文。
 
 构建容器默认使用 Docker Desktop 的 `http.docker.internal:3128` 代理；如代理地址不同，可在宿主机设置 `DOCKER_BUILD_HTTP_PROXY`、`DOCKER_BUILD_HTTPS_PROXY` 和可选的 `DOCKER_BUILD_GRADLE_OPTS` 后执行以下命令。
 
@@ -27,6 +27,8 @@ docker compose run --rm builder :desktopApp:packageDistributionForCurrentOS
 docker compose run --rm builder :webApp:wasmJsProductionExecutableCompileSync
 ```
 
+Linux 容器只能打包当前系统的 Desktop 发行包，产物为 DEB：`desktopApp/build/compose/binaries/main/deb/hd-pwd_1.0.0-1_amd64.deb`。若 Dockerfile 有变更，需先执行 `docker compose build builder`。
+
 Android Debug 打包：
 
 ```text
@@ -34,6 +36,40 @@ docker compose run --rm android-builder
 ```
 
 产物路径示例：`androidApp/build/outputs/apk/debug/hd-pwd-debug.apk`（可用 `adb install -r` 安装）。
+
+### Windows MSI
+
+`jpackage` 无法在 Linux 容器中交叉编译 Windows 安装包，MSI 必须在 Windows 本机打包。Compose 插件会在打包时自动下载 WiX。
+
+本机已安装 JDK 17 与 Gradle 8.11.1 时：
+
+```text
+gradle --no-daemon :desktopApp:packageMsi
+```
+
+若本机没有 JDK / Gradle，可将便携工具链放到 `%LOCALAPPDATA%\hd-pwd-build-tools`（只需准备一次）：
+
+```powershell
+$tools = "$env:LOCALAPPDATA\hd-pwd-build-tools"
+New-Item -ItemType Directory -Force $tools | Out-Null
+Set-Location $tools
+
+curl.exe -L --fail -o openjdk-17.0.2_windows-x64_bin.zip "https://mirrors.huaweicloud.com/openjdk/17.0.2/openjdk-17.0.2_windows-x64_bin.zip"
+curl.exe -L --fail -o gradle-8.11.1-bin.zip "https://mirrors.cloud.tencent.com/gradle/gradle-8.11.1-bin.zip"
+tar -xf openjdk-17.0.2_windows-x64_bin.zip
+tar -xf gradle-8.11.1-bin.zip
+```
+
+然后在项目根目录执行：
+
+```powershell
+$tools = "$env:LOCALAPPDATA\hd-pwd-build-tools"
+$env:JAVA_HOME = "$tools\jdk-17.0.2"
+$env:Path = "$env:JAVA_HOME\bin;$env:Path"
+& "$tools\gradle-8.11.1\bin\gradle.bat" --no-daemon :desktopApp:packageMsi
+```
+
+产物：`desktopApp/build/compose/binaries/main/msi/hd-pwd-1.0.0.msi`。
 
 ## 本地 S3 测试
 
