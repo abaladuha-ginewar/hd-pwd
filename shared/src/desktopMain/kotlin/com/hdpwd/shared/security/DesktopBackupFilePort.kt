@@ -47,11 +47,11 @@ class DesktopBackupFilePort : BackupFilePort {
                 }
                 try {
                     val chooser = JFileChooser().apply {
-                        dialogTitle = "选择 hd-pwd 备份"
+                        dialogTitle = "选择哈密备份"
                         fileSelectionMode = JFileChooser.FILES_ONLY
                         isAcceptAllFileFilterUsed = true
                         isMultiSelectionEnabled = false
-                        val datFilter = FileNameExtensionFilter("hd-pwd 备份 (*.dat)", "dat")
+                        val datFilter = FileNameExtensionFilter("哈密备份 (*.dat)", "dat")
                         addChoosableFileFilter(datFilter)
                         addChoosableFileFilter(FileNameExtensionFilter("二进制文件 (*.bin)", "bin"))
                         fileFilter = datFilter

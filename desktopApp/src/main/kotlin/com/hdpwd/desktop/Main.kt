@@ -23,7 +23,7 @@ fun main() = application {
     )
     Window(
         onCloseRequest = ::exitApplication,
-        title = "hd-pwd",
+        title = "哈密",
         icon = painterResource("icon.png"),
     ) {
         PasswordManagerApp(

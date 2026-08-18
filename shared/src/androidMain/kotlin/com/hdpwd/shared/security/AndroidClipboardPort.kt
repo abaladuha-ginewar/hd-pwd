@@ -22,7 +22,7 @@ class AndroidClipboardPort(
      * 写入剪贴板文本。
      */
     override suspend fun writeText(text: String) {
-        clipboard.setPrimaryClip(ClipData.newPlainText("hd-pwd", text))
+        clipboard.setPrimaryClip(ClipData.newPlainText("哈密", text))
     }
 
     /**

@@ -1,4 +1,4 @@
-# HD Password
+# 哈密
 
 基于 Kotlin Multiplatform 的本地优先密码管理器，支持 Android、Windows Desktop 和 Web。
 
@@ -27,7 +27,7 @@ docker compose run --rm builder :desktopApp:packageDistributionForCurrentOS
 docker compose run --rm builder :webApp:wasmJsProductionExecutableCompileSync
 ```
 
-Linux 容器只能打包当前系统的 Desktop 发行包，产物为 DEB：`desktopApp/build/compose/binaries/main/deb/hd-pwd_1.0.0-1_amd64.deb`。若 Dockerfile 有变更，需先执行 `docker compose build builder`。
+Linux 容器只能打包当前系统的 Desktop 发行包，产物为 DEB：`desktopApp/build/compose/binaries/main/deb/哈密_1.0.0-1_amd64.deb`。若 Dockerfile 有变更，需先执行 `docker compose build builder`。
 
 Android Debug 打包：
 
@@ -35,15 +35,16 @@ Android Debug 打包：
 docker compose run --rm android-builder
 ```
 
-产物路径示例：`androidApp/build/outputs/apk/debug/hd-pwd-debug.apk`（可用 `adb install -r` 安装）。
+产物路径示例：`androidApp/build/outputs/apk/debug/哈密-debug.apk`（可用 `adb install -r` 安装）。
 
 ### Windows MSI
 
 `jpackage` 无法在 Linux 容器中交叉编译 Windows 安装包，MSI 必须在 Windows 本机打包。Compose 插件会在打包时自动下载 WiX。
 
-本机已安装 JDK 17 与 Gradle 8.11.1 时：
+本机已安装 JDK 17 与 Gradle 8.11.1 时（中文包名需要 UTF-8，否则 jpackage 会报 `Input length = 1`）：
 
 ```text
+set JAVA_TOOL_OPTIONS=-Dfile.encoding=UTF-8
 gradle --no-daemon :desktopApp:packageMsi
 ```
 
@@ -66,10 +67,11 @@ tar -xf gradle-8.11.1-bin.zip
 $tools = "$env:LOCALAPPDATA\hd-pwd-build-tools"
 $env:JAVA_HOME = "$tools\jdk-17.0.2"
 $env:Path = "$env:JAVA_HOME\bin;$env:Path"
+$env:JAVA_TOOL_OPTIONS = "-Dfile.encoding=UTF-8"
 & "$tools\gradle-8.11.1\bin\gradle.bat" --no-daemon :desktopApp:packageMsi
 ```
 
-产物：`desktopApp/build/compose/binaries/main/msi/hd-pwd-1.0.0.msi`。
+产物：`desktopApp/build/compose/binaries/main/msi/哈密-1.0.0.msi`。
 
 ## 本地 S3 测试
 

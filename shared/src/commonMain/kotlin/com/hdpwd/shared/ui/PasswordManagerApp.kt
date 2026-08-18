@@ -452,7 +452,7 @@ private fun UserListScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("hd-pwd", style = MaterialTheme.typography.headlineMedium)
+                Text("哈密", style = MaterialTheme.typography.headlineMedium)
                 IconButton(onClick = onSettings) {
                     Icon(Icons.Filled.Settings, contentDescription = "设备设置")
                 }

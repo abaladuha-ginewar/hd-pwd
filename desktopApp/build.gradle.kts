@@ -21,14 +21,14 @@ compose.desktop {
         mainClass = "com.hdpwd.desktop.MainKt"
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
-            packageName = "hd-pwd"
+            packageName = "哈密"
             packageVersion = "1.0.0"
-            description = "hd-pwd password manager"
-            copyright = "© hd-pwd"
-            vendor = "hd-pwd"
+            description = "哈密密码管理器"
+            copyright = "© 哈密"
+            vendor = "哈密"
             windows {
                 iconFile.set(project.file("icons/icon.ico"))
-                menuGroup = "hd-pwd"
+                menuGroup = "哈密"
                 upgradeUuid = "8f3c1a2e-6b4d-4e91-9c2a-1d7b5e0f3a28"
                 dirChooser = true
             }

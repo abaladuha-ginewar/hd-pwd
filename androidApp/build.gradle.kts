@@ -54,11 +54,11 @@ android {
         }
     }
 
-    // 最终 APK 文件名：hd-pwd-debug.apk / hd-pwd-release.apk
+    // 最终 APK 文件名：哈密-debug.apk / 哈密-release.apk
     applicationVariants.configureEach {
         outputs.configureEach {
             val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
-            output.outputFileName = "hd-pwd-${buildType.name}.apk"
+            output.outputFileName = "哈密-${buildType.name}.apk"
         }
     }
 }
