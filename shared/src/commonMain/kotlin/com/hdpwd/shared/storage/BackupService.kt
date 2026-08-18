@@ -55,11 +55,24 @@ class BackupService(
 
     /**
      * 使用恢复密码认证并导入备份正文。
+     *
+     * 优先用 BackupKey 域解密；失败后再尝试 DataKey 域，兼容早期未隔离用途密钥的备份。
      */
     suspend fun import(
         recoveryPassword: CharSequence,
         backup: ByteArray,
-    ): VaultState = backupCipher.decrypt(recoveryPassword, backup).also(VaultValidator::requireValid)
+    ): VaultState {
+        return try {
+            backupCipher.decrypt(recoveryPassword, backup).also(VaultValidator::requireValid)
+        } catch (backupFailure: Throwable) {
+            if (backupCipher === vaultCipher) throw backupFailure
+            try {
+                vaultCipher.decrypt(recoveryPassword, backup).also(VaultValidator::requireValid)
+            } catch (_: Throwable) {
+                throw backupFailure
+            }
+        }
+    }
 
     /**
      * 创建明确区分 DataKey 与 BackupKey 域的生产备份服务。

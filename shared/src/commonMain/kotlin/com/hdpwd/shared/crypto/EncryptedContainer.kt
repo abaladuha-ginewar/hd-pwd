@@ -56,17 +56,23 @@ class EncryptedContainerCodec(
 
     /**
      * 验证格式头部、附加认证数据并解密载荷。
+     *
+     * 对从安卓拷到 Windows 时常见的 BOM、UTF-16 误转码、前置垃圾字节和扇区尾部填充做兼容。
      */
     suspend fun open(key: ByteArray, encoded: ByteArray): ByteArray {
-        val parsed = parse(encoded)
+        val prepared = prepareContainerBytes(encoded)
+        val parsed = parsePrepared(prepared)
         val header = parsed.first
         val nonce = header.nonceHex.hexToByteArray()
         val associatedData = header.associatedDataHex.hexToByteArray()
-        return crypto.open(
-            key,
-            nonce,
-            parsed.second,
-            parsed.third + associatedData,
+        val aad = parsed.third + associatedData
+        return openCiphertext(
+            key = key,
+            nonce = nonce,
+            ciphertext = parsed.second,
+            aad = aad,
+            originalSize = encoded.size,
+            preparedSize = prepared.size,
         )
     }
 
@@ -75,7 +81,10 @@ class EncryptedContainerCodec(
      */
     fun readHeader(encoded: ByteArray): ContainerHeader = parse(encoded).first
 
-    private fun parse(encoded: ByteArray): Triple<ContainerHeader, ByteArray, ByteArray> {
+    private fun parse(encoded: ByteArray): Triple<ContainerHeader, ByteArray, ByteArray> =
+        parsePrepared(prepareContainerBytes(encoded))
+
+    private fun parsePrepared(encoded: ByteArray): Triple<ContainerHeader, ByteArray, ByteArray> {
         require(encoded.size >= 9) { "加密容器长度不足" }
         require(encoded.copyOfRange(0, 4).decodeToString() == "HDPW") { "加密容器 magic 无效" }
         val version = encoded[4].toInt() and 0xff
@@ -90,6 +99,39 @@ class EncryptedContainerCodec(
             "加密容器头部不匹配"
         }
         return Triple(header, encoded.copyOfRange(headerEnd, encoded.size), headerBytes)
+    }
+
+    private suspend fun openCiphertext(
+        key: ByteArray,
+        nonce: ByteArray,
+        ciphertext: ByteArray,
+        aad: ByteArray,
+        originalSize: Int,
+        preparedSize: Int,
+    ): ByteArray {
+        try {
+            return crypto.open(key, nonce, ciphertext, aad)
+        } catch (first: Throwable) {
+            val maxTrim = minOf(MAX_TRAILING_PAD, ciphertext.size - 16)
+            if (maxTrim <= 0) throw first
+            val trims = LinkedHashSet<Int>()
+            val trailingZeros = countTrailingZeros(ciphertext, maxTrim)
+            for (keptTagZeros in 0..16) {
+                val trim = trailingZeros - keptTagZeros
+                if (trim in 1..maxTrim) trims += trim
+            }
+            addAlignedPaddingTrims(originalSize, maxTrim, trims)
+            addAlignedPaddingTrims(preparedSize, maxTrim, trims)
+            var last = first
+            for (trim in trims) {
+                try {
+                    return crypto.open(key, nonce, ciphertext.copyOf(ciphertext.size - trim), aad)
+                } catch (failure: Throwable) {
+                    last = failure
+                }
+            }
+            throw last
+        }
     }
 }
 
@@ -161,5 +203,95 @@ private fun String.hexToByteArray(): ByteArray {
     require(length % 2 == 0) { "十六进制长度无效" }
     return ByteArray(length / 2) { index ->
         substring(index * 2, index * 2 + 2).toInt(16).toByte()
+    }
+}
+
+private const val MAGIC = "HDPW"
+private const val MAGIC_SEARCH_LIMIT = 256
+private const val MAX_TRAILING_PAD = 511
+
+/**
+ * 去掉 BOM / UTF-16 误转码，并切到 HDPW 魔数。
+ */
+internal fun prepareContainerBytes(encoded: ByteArray): ByteArray {
+    val collapsed = collapseUtf16IfNeeded(encoded)
+    val withoutBom = stripUtf8Bom(collapsed)
+    val magicAt = indexOfMagic(withoutBom)
+    require(magicAt >= 0) { "加密容器 magic 无效" }
+    return if (magicAt == 0) withoutBom else withoutBom.copyOfRange(magicAt, withoutBom.size)
+}
+
+private fun stripUtf8Bom(bytes: ByteArray): ByteArray =
+    if (bytes.size >= 3 &&
+        bytes[0] == 0xEF.toByte() &&
+        bytes[1] == 0xBB.toByte() &&
+        bytes[2] == 0xBF.toByte()
+    ) {
+        bytes.copyOfRange(3, bytes.size)
+    } else {
+        bytes
+    }
+
+private fun collapseUtf16IfNeeded(bytes: ByteArray): ByteArray {
+    val leBom = bytes.size >= 2 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xFE.toByte()
+    val beBom = bytes.size >= 2 && bytes[0] == 0xFE.toByte() && bytes[1] == 0xFF.toByte()
+    val offset = if (leBom || beBom) 2 else 0
+    val remaining = bytes.size - offset
+    if (remaining < MAGIC.length * 2 || remaining % 2 != 0) return bytes
+    val littleEndian = when {
+        leBom -> true
+        beBom -> false
+        else -> looksLikeUtf16Le(bytes, offset)
+    }
+    if (!littleEndian && !beBom && !looksLikeUtf16Be(bytes, offset)) return bytes
+    val collapsed = ByteArray(remaining / 2)
+    for (index in collapsed.indices) {
+        val first = bytes[offset + index * 2]
+        val second = bytes[offset + index * 2 + 1]
+        val (lo, hi) = if (littleEndian) first to second else second to first
+        if (hi != 0.toByte()) return bytes
+        collapsed[index] = lo
+    }
+    return collapsed
+}
+
+private fun looksLikeUtf16Le(bytes: ByteArray, offset: Int): Boolean =
+    MAGIC.indices.all { index ->
+        bytes[offset + index * 2] == MAGIC[index].code.toByte() &&
+            bytes[offset + index * 2 + 1] == 0.toByte()
+    }
+
+private fun looksLikeUtf16Be(bytes: ByteArray, offset: Int): Boolean =
+    MAGIC.indices.all { index ->
+        bytes[offset + index * 2] == 0.toByte() &&
+            bytes[offset + index * 2 + 1] == MAGIC[index].code.toByte()
+    }
+
+private fun indexOfMagic(bytes: ByteArray): Int {
+    val limit = minOf(bytes.size - MAGIC.length, MAGIC_SEARCH_LIMIT - 1)
+    for (index in 0..limit) {
+        if (bytes[index] == MAGIC[0].code.toByte() &&
+            bytes[index + 1] == MAGIC[1].code.toByte() &&
+            bytes[index + 2] == MAGIC[2].code.toByte() &&
+            bytes[index + 3] == MAGIC[3].code.toByte()
+        ) {
+            return index
+        }
+    }
+    return -1
+}
+
+private fun countTrailingZeros(bytes: ByteArray, max: Int): Int {
+    var count = 0
+    while (count < max && bytes[bytes.size - 1 - count] == 0.toByte()) {
+        count++
+    }
+    return count
+}
+
+private fun addAlignedPaddingTrims(size: Int, maxTrim: Int, trims: MutableSet<Int>) {
+    if (size % 512 != 0) return
+    for (trim in 1..minOf(511, maxTrim)) {
+        trims += trim
     }
 }

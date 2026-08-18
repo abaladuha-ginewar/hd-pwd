@@ -25,14 +25,16 @@ private class DiglolCryptoProvider : CryptoProvider {
         password: ByteArray,
         salt: ByteArray,
         parameters: KdfParameters,
-    ): ByteArray = Argon2(
-        version = Argon2.Version.V13,
-        type = Argon2.Type.ID,
-        iterations = parameters.iterations,
-        memory = parameters.memoryKiB,
-        parallelism = parameters.parallelism,
-        hashSize = parameters.outputLength,
-    ).deriveKey(password, salt)
+    ): ByteArray = argon2(Argon2.Type.ID, password, salt, parameters)
+
+    /**
+     * 使用 Argon2d 派生，仅兼容旧版安卓 diglol 错映射写出的密文。
+     */
+    override suspend fun argon2d(
+        password: ByteArray,
+        salt: ByteArray,
+        parameters: KdfParameters,
+    ): ByteArray = argon2(Argon2.Type.D, password, salt, parameters)
 
     /**
      * 使用标准 HKDF-SHA-256 扩展用途密钥。
@@ -63,4 +65,18 @@ private class DiglolCryptoProvider : CryptoProvider {
         ciphertext: ByteArray,
         aad: ByteArray,
     ): ByteArray = XChaCha20Poly1305(key, nonce).decrypt(ciphertext, aad)
+
+    private suspend fun argon2(
+        type: Argon2.Type,
+        password: ByteArray,
+        salt: ByteArray,
+        parameters: KdfParameters,
+    ): ByteArray = Argon2(
+        version = Argon2.Version.V13,
+        type = type,
+        iterations = parameters.iterations,
+        memory = parameters.memoryKiB,
+        parallelism = parameters.parallelism,
+        hashSize = parameters.outputLength,
+    ).deriveKey(password, salt)
 }

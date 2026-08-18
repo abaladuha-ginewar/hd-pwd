@@ -37,6 +37,7 @@ kotlin {
         }
         androidMain.dependencies {
             implementation(libs.diglol.crypto)
+            implementation(libs.signal.argon2)
             implementation(libs.androidx.biometric)
             implementation(libs.ktor.client.okhttp)
         }

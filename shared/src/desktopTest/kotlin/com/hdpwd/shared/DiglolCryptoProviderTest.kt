@@ -7,6 +7,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
+import kotlin.test.assertFalse
 
 /**
  * 验证 Desktop 实际提供者的 Argon2id、HKDF 和 XChaCha20-Poly1305 路径。
@@ -25,7 +26,13 @@ class DiglolCryptoProviderTest {
                 salt = salt,
                 parameters = KdfParameters(memoryKiB = 16, iterations = 1, parallelism = 1),
             )
+            val derivedD = provider.argon2d(
+                password = "test-password".encodeToByteArray(),
+                salt = salt,
+                parameters = KdfParameters(memoryKiB = 16, iterations = 1, parallelism = 1),
+            )
             assertEquals(32, derived.size)
+            assertFalse(derived.contentEquals(derivedD))
             val key = provider.hkdfSha256(derived, salt, "test-domain".encodeToByteArray(), 32)
             val nonce = provider.randomBytes(24)
             val aad = "header".encodeToByteArray()

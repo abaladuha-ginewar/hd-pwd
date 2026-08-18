@@ -3,6 +3,7 @@ package com.hdpwd.shared
 import com.hdpwd.shared.crypto.CryptoProvider
 import com.hdpwd.shared.crypto.EncryptedContainerCodec
 import com.hdpwd.shared.crypto.KdfParameters
+import com.hdpwd.shared.crypto.platformCryptoProvider
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -34,11 +35,43 @@ class EncryptedContainerTest {
     @Test
     fun unknownVersionIsRejected() {
         runTest {
-            val codec = EncryptedContainerCodec(FakeCryptoProvider())
-            val encoded = codec.seal(ByteArray(32), byteArrayOf(1), KdfParameters(1, 1, 1))
-            encoded[4] = 2
-            assertFails { codec.open(ByteArray(32), encoded) }
+        val codec = EncryptedContainerCodec(FakeCryptoProvider())
+        val encoded = codec.seal(ByteArray(32), byteArrayOf(1), KdfParameters(1, 1, 1))
+        encoded[4] = 2
+        assertFails { codec.open(ByteArray(32), encoded) }
         }
+    }
+
+    /**
+     * 从安卓拷到 Windows 时可能出现的 BOM、前置字节、尾部填充和 UTF-16 误转码仍应能解密。
+     */
+    @Test
+    fun transferArtifactsFromAndroidToWindowsAreAccepted() = runTest {
+        val codec = EncryptedContainerCodec(platformCryptoProvider())
+        val key = ByteArray(32) { 7 }
+        val payload = "android-backup-payload".encodeToByteArray()
+        val encoded = codec.seal(
+            key = key,
+            plaintext = payload,
+            kdfParameters = KdfParameters(16, 1, 1),
+            associatedData = "vault-id".encodeToByteArray(),
+        )
+        val bom = byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte())
+        assertContentEquals(payload, codec.open(key, bom + encoded))
+        assertContentEquals(payload, codec.open(key, byteArrayOf(0, 1, 2) + encoded))
+        assertContentEquals(payload, codec.open(key, encoded + ByteArray(200)))
+        val sectorPad = (512 - encoded.size % 512) % 512
+        if (sectorPad != 0) {
+            assertContentEquals(payload, codec.open(key, encoded + ByteArray(sectorPad) { 0x5A }))
+        }
+        val utf16 = ByteArray(2 + encoded.size * 2)
+        utf16[0] = 0xFF.toByte()
+        utf16[1] = 0xFE.toByte()
+        encoded.forEachIndexed { index, byte ->
+            utf16[2 + index * 2] = byte
+            utf16[3 + index * 2] = 0
+        }
+        assertContentEquals(payload, codec.open(key, utf16))
     }
 }
 

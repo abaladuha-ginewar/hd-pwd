@@ -21,6 +21,18 @@ interface CryptoProvider {
     ): ByteArray
 
     /**
+     * 使用 Argon2d 派生密钥。
+     *
+     * 仅用于解开 diglol Android 0.2.0 把 `Argon2.Type.ID` 错映射成 Argon2d
+     * 而写出的历史密文；新密文必须走 [argon2id]。测试替身默认同 [argon2id]。
+     */
+    suspend fun argon2d(
+        password: ByteArray,
+        salt: ByteArray,
+        parameters: KdfParameters,
+    ): ByteArray = argon2id(password, salt, parameters)
+
+    /**
      * 使用 HKDF-SHA-256 做用途隔离派生。
      */
     fun hkdfSha256(

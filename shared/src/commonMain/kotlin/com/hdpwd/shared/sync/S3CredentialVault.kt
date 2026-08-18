@@ -4,6 +4,7 @@ import com.hdpwd.shared.crypto.CryptoDomains
 import com.hdpwd.shared.crypto.CryptoProvider
 import com.hdpwd.shared.crypto.EncryptedContainerCodec
 import com.hdpwd.shared.crypto.KdfParameters
+import com.hdpwd.shared.crypto.openWithArgon2Compat
 
 /**
  * 使用 Vault 派生用途密钥独立加密 S3 Secret 的服务。
@@ -89,11 +90,18 @@ class S3CredentialVault(
             "尚未配置 S3 访问密钥"
         }
         val salt = credentialsSaltHex.credentialHexToBytes()
-        val syncKey = deriveSyncKey(recoveryPassword, salt)
+        val password = recoveryPassword.toString().encodeToByteArray()
         return try {
-            open(syncKey, encryptedCredentialsHex.credentialHexToBytes())
+            openWithArgon2Compat(
+                crypto = crypto,
+                password = password,
+                salt = salt,
+                parameters = kdfParameters,
+                deriveKey = { rootKey -> isolateSyncKey(rootKey, salt) },
+                open = { syncKey -> open(syncKey, encryptedCredentialsHex.credentialHexToBytes()) },
+            )
         } finally {
-            syncKey.fill(0)
+            password.fill(0)
             salt.fill(0)
         }
     }
@@ -105,16 +113,19 @@ class S3CredentialVault(
             parameters = kdfParameters,
         )
         return try {
-            crypto.hkdfSha256(
-                keyMaterial = rootKey,
-                salt = salt,
-                info = CryptoDomains.SYNC.encodeToByteArray(),
-                length = 32,
-            )
+            isolateSyncKey(rootKey, salt)
         } finally {
             rootKey.fill(0)
         }
     }
+
+    private fun isolateSyncKey(rootKey: ByteArray, salt: ByteArray): ByteArray =
+        crypto.hkdfSha256(
+            keyMaterial = rootKey,
+            salt = salt,
+            info = CryptoDomains.SYNC.encodeToByteArray(),
+            length = 32,
+        )
 }
 
 /**

@@ -4,6 +4,7 @@ import com.hdpwd.shared.crypto.CryptoDomains
 import com.hdpwd.shared.crypto.CryptoProvider
 import com.hdpwd.shared.crypto.EncryptedContainerCodec
 import com.hdpwd.shared.crypto.KdfParameters
+import com.hdpwd.shared.crypto.openWithArgon2Compat
 
 /**
  * 设备级 DeviceLEK 包装，以及按用户封装本机缓存的恢复密码。
@@ -57,13 +58,26 @@ class LocalEnvelopeService(
         masterPassword: CharSequence,
     ): LocalEnvelopeKey {
         val header = container.readHeader(record.wrappedDeviceLek)
-        val wrappingKey = deriveLocalKey(masterPassword, header.saltHex.hexToByteArray())
+        val salt = header.saltHex.hexToByteArray()
+        val password = masterPassword.toString().encodeToByteArray()
         return try {
-            LocalEnvelopeKey(container.open(wrappingKey, record.wrappedDeviceLek))
-        } catch (failure: Throwable) {
-            throw IllegalArgumentException("本机主密码错误", failure)
+            openWithArgon2Compat(
+                crypto = crypto,
+                password = password,
+                salt = salt,
+                parameters = header.kdfParameters,
+                deriveKey = { rootKey -> rootKey.copyOf() },
+                open = { wrappingKey ->
+                    try {
+                        LocalEnvelopeKey(container.open(wrappingKey, record.wrappedDeviceLek))
+                    } catch (failure: Throwable) {
+                        throw IllegalArgumentException("本机主密码错误", failure)
+                    }
+                },
+            )
         } finally {
-            wrappingKey.fill(0)
+            password.fill(0)
+            salt.fill(0)
         }
     }
 
@@ -179,13 +193,26 @@ class LocalEnvelopeService(
         val wrapped = envelope.wrappedLocalEnvelopeKey
             ?: error("不是旧版本地封装")
         val header = container.readHeader(wrapped)
-        val wrappingKey = deriveLocalKey(localPassword, header.saltHex.hexToByteArray())
+        val salt = header.saltHex.hexToByteArray()
+        val password = localPassword.toString().encodeToByteArray()
         return try {
-            LocalEnvelopeKey(container.open(wrappingKey, wrapped))
-        } catch (failure: Throwable) {
-            throw IllegalArgumentException("本机主密码错误", failure)
+            openWithArgon2Compat(
+                crypto = crypto,
+                password = password,
+                salt = salt,
+                parameters = header.kdfParameters,
+                deriveKey = { rootKey -> rootKey.copyOf() },
+                open = { wrappingKey ->
+                    try {
+                        LocalEnvelopeKey(container.open(wrappingKey, wrapped))
+                    } catch (failure: Throwable) {
+                        throw IllegalArgumentException("本机主密码错误", failure)
+                    }
+                },
+            )
         } finally {
-            wrappingKey.fill(0)
+            password.fill(0)
+            salt.fill(0)
         }
     }
 

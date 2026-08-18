@@ -5,6 +5,7 @@ import com.hdpwd.shared.crypto.CryptoDomains
 import com.hdpwd.shared.crypto.CryptoProvider
 import com.hdpwd.shared.crypto.EncryptedContainerCodec
 import com.hdpwd.shared.crypto.KdfParameters
+import com.hdpwd.shared.crypto.openWithArgon2Compat
 import com.hdpwd.shared.domain.VaultState
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -44,36 +45,54 @@ class AuthenticatedVaultCipher(
      */
     override suspend fun decrypt(recoveryPassword: CharSequence, encrypted: ByteArray): VaultState {
         val header: ContainerHeader = container.readHeader(encrypted)
-        val dataKey = deriveDataKey(recoveryPassword, header.saltHex.hexToByteArray())
-        return try {
-            val payload = try {
-                container.open(dataKey, encrypted)
-            } catch (failure: Throwable) {
-                throw IllegalArgumentException("恢复密码错误，或备份/密码库数据已损坏", failure)
-            }
-            vaultJson.decodeFromString(payload.decodeToString())
+        val salt = header.saltHex.hexToByteArray()
+        val password = recoveryPassword.toString().encodeToByteArray()
+        val payload = try {
+            openWithArgon2Compat(
+                crypto = crypto,
+                password = password,
+                salt = salt,
+                parameters = header.kdfParameters,
+                deriveKey = { rootKey -> isolateKey(rootKey, salt) },
+                open = { dataKey ->
+                    try {
+                        container.open(dataKey, encrypted)
+                    } catch (failure: Throwable) {
+                        throw IllegalArgumentException("恢复密码错误，或备份/密码库数据已损坏", failure)
+                    }
+                },
+            )
         } finally {
-            dataKey.fill(0)
+            password.fill(0)
+            salt.fill(0)
         }
+        return vaultJson.decodeFromString(payload.decodeToString())
     }
 
-    private suspend fun deriveDataKey(recoveryPassword: CharSequence, salt: ByteArray): ByteArray {
+    private suspend fun deriveDataKey(
+        recoveryPassword: CharSequence,
+        salt: ByteArray,
+        parameters: KdfParameters = kdfParameters,
+    ): ByteArray {
         val rootKey = crypto.argon2id(
             password = recoveryPassword.toString().encodeToByteArray(),
             salt = salt,
-            parameters = kdfParameters,
+            parameters = parameters,
         )
         return try {
-            crypto.hkdfSha256(
-                keyMaterial = rootKey,
-                salt = salt,
-                info = keyDomain.encodeToByteArray(),
-                length = 32,
-            )
+            isolateKey(rootKey, salt)
         } finally {
             rootKey.fill(0)
         }
     }
+
+    private fun isolateKey(rootKey: ByteArray, salt: ByteArray): ByteArray =
+        crypto.hkdfSha256(
+            keyMaterial = rootKey,
+            salt = salt,
+            info = keyDomain.encodeToByteArray(),
+            length = 32,
+        )
 }
 
 /**
