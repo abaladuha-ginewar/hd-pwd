@@ -52,6 +52,11 @@ android {
         getByName("debug") {
             signingConfig = signingConfigs.getByName("debug")
         }
+        getByName("release") {
+            // 未配置独立 release 证书时沿用 debug 证书，保证 APK 可直接安装
+            signingConfig = signingConfigs.getByName("debug")
+            isMinifyEnabled = false
+        }
     }
 
     // 最终 APK 文件名：哈密-debug.apk / 哈密-release.apk
