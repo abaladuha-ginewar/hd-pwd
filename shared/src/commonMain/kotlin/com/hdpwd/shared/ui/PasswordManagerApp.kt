@@ -45,7 +45,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -495,6 +494,7 @@ private fun SetupDeviceScreen(
     var confirm by remember { mutableStateOf("") }
     var enableBiometric by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
     val biometricAvailable = biometric.availability() == BiometricAvailability.AVAILABLE
 
     SafeContent {
@@ -520,8 +520,9 @@ private fun SetupDeviceScreen(
                         password != confirm -> "两次输入的主密码不一致"
                         else -> null
                     }
-                    if (error != null) return@Button
+                    if (error != null || busy) return@Button
                     scope.launch {
+                        busy = true
                         try {
                             val created = envelopeService.createDeviceLock(password)
                             var record = created.record
@@ -547,12 +548,15 @@ private fun SetupDeviceScreen(
                             confirm = ""
                         } catch (ex: Throwable) {
                             error = UserFacingText.fromThrowable(ex, "设置设备锁失败")
+                        } finally {
+                            busy = false
                         }
                     }
                 },
+                enabled = !busy,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text("完成")
+                Text(if (busy) "正在设置…" else "完成")
             }
         }
     }
@@ -855,16 +859,21 @@ private fun CreateUserScreen(
     var importLabel by remember { mutableStateOf<String?>(null) }
     val backupService = remember { BackupService.production(platformCryptoProvider()) }
 
+    fun liveField(label: String, composeValue: String): String {
+        val fromDom = snapshotDomTextField(label)
+        return if (!fromDom.isNullOrEmpty()) fromDom else composeValue
+    }
+
     SafeContent {
         Column(
             modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             EditorTopBar(title = "创建 / 导入用户", onClose = onCancel)
-            OutlinedTextField(
-                name,
-                { name = it },
-                label = { Text("用户名") },
+            HdOutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = "用户名",
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -881,9 +890,7 @@ private fun CreateUserScreen(
                 Button(onClick = {
                     scope.launch {
                         val bytes = backupFiles.openBackup()
-                        if (bytes == null) {
-                            error = "未选择备份文件"
-                        } else {
+                        if (bytes != null) {
                             importBytes = bytes
                             importLabel = "已选择备份（${bytes.size} 字节）"
                             error = null
@@ -902,10 +909,14 @@ private fun CreateUserScreen(
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton(onClick = onCancel) { Text("取消") }
                 Button(onClick = {
+                    val liveName = liveField("用户名", name)
+                    val liveRecovery = liveField("恢复密码", recoveryPassword)
+                    if (liveName != name) name = liveName
+                    if (liveRecovery != recoveryPassword) recoveryPassword = liveRecovery
                     error = when {
-                        name.isBlank() -> "用户名不能为空"
-                        name in existingNames -> "用户名已存在"
-                        recoveryPassword.isBlank() -> "恢复密码不能为空"
+                        liveName.isBlank() -> "用户名不能为空"
+                        liveName in existingNames -> "用户名已存在"
+                        liveRecovery.isBlank() -> "恢复密码不能为空"
                         !session.canStart() -> "需要先通过设备验证"
                         else -> null
                     }
@@ -919,7 +930,7 @@ private fun CreateUserScreen(
                             var createdId: String? = null
                             try {
                                 val importedVault = importBytes?.let {
-                                    backupService.import(recoveryPassword, it)
+                                    backupService.import(liveRecovery, it)
                                 }
                                 val id = EntityId(
                                     platformCryptoProvider().randomBytes(16)
@@ -935,21 +946,21 @@ private fun CreateUserScreen(
                                         deviceKey,
                                         deviceGeneration,
                                         id.value,
-                                        recoveryPassword,
+                                        liveRecovery,
                                     )
                                     repository?.writeEnvelope(id.value, envelope)
-                                    repository?.writeVault(id.value, recoveryPassword, vault)
+                                    repository?.writeVault(id.value, liveRecovery, vault)
                                     repository?.let { repo ->
                                         val metas = (repo.listUsers() + PersistedUserMeta(
                                             id = id.value,
-                                            username = name,
+                                            username = liveName,
                                         )).distinctBy { it.id }
                                         repo.saveUsers(metas)
                                     }
                                     onCreated(
                                         UserSummary(
                                             id = id,
-                                            name = name,
+                                            name = liveName,
                                             vault = vault,
                                             recoveryEnvelope = envelope,
                                         ),
@@ -1696,11 +1707,11 @@ private fun VaultScreen(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            OutlinedTextField(
+            HdOutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("搜索 key、标题、标签") },
+                label = "搜索 key、标题、标签",
                 singleLine = true,
             )
             if (visibleItems.isEmpty()) {
@@ -1968,11 +1979,12 @@ private fun EntryEditorScreen(
                     Text("通过恢复配方快速填写")
                 }
                 if (useRecipe) {
-                    OutlinedTextField(
+                    HdOutlinedTextField(
                         value = recipeText,
                         onValueChange = { recipeText = it },
-                        label = { Text("恢复配方") },
+                        label = "恢复配方",
                         modifier = Modifier.fillMaxWidth(),
+                        singleLine = false,
                         minLines = 3,
                     )
                     Button(onClick = {
@@ -1991,18 +2003,18 @@ private fun EntryEditorScreen(
                     recipePreview?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                 }
             }
-            OutlinedTextField(
-                key,
-                { key = it },
-                label = { Text("key") },
+            HdOutlinedTextField(
+                value = key,
+                onValueChange = { key = it },
+                label = "key",
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
-                supportingText = { Text("支持字母、数字、下划线、点和连字符") },
+                supportingText = "支持字母、数字、下划线、点和连字符",
             )
-            OutlinedTextField(
-                title,
-                { title = it },
-                label = { Text("标题") },
+            HdOutlinedTextField(
+                value = title,
+                onValueChange = { title = it },
+                label = "标题",
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -2015,21 +2027,21 @@ private fun EntryEditorScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    OutlinedTextField(
+                    HdOutlinedTextField(
                         value = label.name,
                         onValueChange = { value ->
                             labels[index] = label.copy(name = value)
                         },
-                        label = { Text("标签名") },
+                        label = "标签名",
                         modifier = Modifier.weight(1f),
                         singleLine = true,
                     )
-                    OutlinedTextField(
+                    HdOutlinedTextField(
                         value = label.value,
                         onValueChange = { value ->
                             labels[index] = label.copy(value = value)
                         },
-                        label = { Text("标签值") },
+                        label = "标签值",
                         modifier = Modifier.weight(1f),
                         singleLine = true,
                     )
@@ -2043,17 +2055,17 @@ private fun EntryEditorScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                OutlinedTextField(
+                HdOutlinedTextField(
                     value = newLabelName,
                     onValueChange = { newLabelName = it },
-                    label = { Text("新标签名") },
+                    label = "新标签名",
                     modifier = Modifier.weight(1f),
                     singleLine = true,
                 )
-                OutlinedTextField(
+                HdOutlinedTextField(
                     value = newLabelValue,
                     onValueChange = { newLabelValue = it },
-                    label = { Text("新标签值") },
+                    label = "新标签值",
                     modifier = Modifier.weight(1f),
                     singleLine = true,
                 )
@@ -2112,12 +2124,12 @@ private fun PasswordPolicyEditor(
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("密码规则", style = MaterialTheme.typography.titleSmall)
-        OutlinedTextField(
+        HdOutlinedTextField(
             value = policy.length.toString(),
             onValueChange = { value ->
                 value.toIntOrNull()?.let { onChange(policy.copy(length = it)) }
             },
-            label = { Text("长度") },
+            label = "长度",
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -2133,17 +2145,17 @@ private fun PasswordPolicyEditor(
         PolicyToggle("必须包含符号", policy.requireSymbols) {
             onChange(policy.copy(requireSymbols = it))
         }
-        OutlinedTextField(
+        HdOutlinedTextField(
             value = policy.symbols,
             onValueChange = { onChange(policy.copy(symbols = it)) },
-            label = { Text("符号集合") },
+            label = "符号集合",
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
-        OutlinedTextField(
+        HdOutlinedTextField(
             value = policy.excluded,
             onValueChange = { onChange(policy.copy(excluded = it)) },
-            label = { Text("排除字符") },
+            label = "排除字符",
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -2186,10 +2198,10 @@ private fun FolderEditorScreen(
                 title = if (isNew) "添加文件夹" else "编辑文件夹",
                 onClose = onCancel,
             )
-            OutlinedTextField(
-                name,
-                { name = it },
-                label = { Text("文件夹名") },
+            HdOutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = "文件夹名",
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -2540,63 +2552,61 @@ private fun S3SettingsScreen(
                 Text("手动编辑全部参数（端点/区域等）")
             }
             if (preset.requiresAccountId) {
-                OutlinedTextField(
-                    accountId,
-                    {
+                HdOutlinedTextField(
+                    value = accountId,
+                    onValueChange = {
                         accountId = it
                         refreshSuggestedEndpoint()
                     },
-                    label = { Text("Account ID（Cloudflare）") },
+                    label = "Account ID（Cloudflare）",
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
-            OutlinedTextField(
-                region,
-                {
+            HdOutlinedTextField(
+                value = region,
+                onValueChange = {
                     region = it
                     refreshSuggestedEndpoint()
                 },
-                label = { Text("区域") },
-                placeholder = { Text(preset.regionHint) },
+                label = "区域",
+                placeholder = preset.regionHint,
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
-            OutlinedTextField(
-                endpoint,
-                { endpoint = it },
-                label = { Text("端点地址") },
+            HdOutlinedTextField(
+                value = endpoint,
+                onValueChange = { endpoint = it },
+                label = "端点地址",
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
                 enabled = manualAll || preset.requiresManualEndpoint || endpoint.isBlank(),
-                supportingText = {
-                    if (!manualAll && !preset.requiresManualEndpoint && endpoint.isNotBlank()) {
-                        Text("已按厂商模板填充，可勾选上方手动编辑以修改")
-                    }
+                supportingText = if (!manualAll && !preset.requiresManualEndpoint && endpoint.isNotBlank()) {
+                    "已按厂商模板填充，可勾选上方手动编辑以修改"
+                } else {
+                    null
                 },
             )
-            OutlinedTextField(
-                bucket,
-                { bucket = it },
-                label = { Text("存储桶（Bucket）") },
+            HdOutlinedTextField(
+                value = bucket,
+                onValueChange = { bucket = it },
+                label = "存储桶（Bucket）",
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
-            OutlinedTextField(
-                objectPrefix,
-                { objectPrefix = it },
-                label = { Text("存储目录") },
-                placeholder = { Text("如 family-vault；留空表示 Bucket 根目录") },
+            HdOutlinedTextField(
+                value = objectPrefix,
+                onValueChange = { objectPrefix = it },
+                label = "存储目录",
+                placeholder = "如 family-vault；留空表示 Bucket 根目录",
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
-                supportingText = {
-                    Text("备份写入该目录下的 vault.dat；不自动追加用户名或设备目录。相同目录 + 相同恢复密码即同一密码库。")
-                },
+                supportingText = "备份写入该目录下的 vault.dat；不自动追加用户名或设备目录。相同目录 + 相同恢复密码即同一密码库。",
             )
-            OutlinedTextField(
-                accessKeyId,
-                { accessKeyId = it },
-                label = { Text("Access Key") },
+            HdOutlinedTextField(
+                value = accessKeyId,
+                onValueChange = { accessKeyId = it },
+                label = "Access Key",
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )

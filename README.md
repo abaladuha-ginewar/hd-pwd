@@ -33,7 +33,7 @@ docker compose run --rm builder :webApp:wasmJsProductionExecutableCompileSync
 docker compose up --build web
 ```
 
-浏览器打开 `http://localhost:8080`。Web 无生物识别，数据保存在该源的 localStorage。
+浏览器打开 `http://127.0.0.1:8080`（请用 IPv4；`localhost` 在部分 Windows/WSL2 环境下会走到异常的 IPv6 代理并显示 Not Found）。Web 无生物识别，数据保存在该源的 localStorage。
 
 Linux 容器只能打包当前系统的 Desktop 发行包，产物为 DEB：`desktopApp/build/compose/binaries/main/deb/哈密_1.0.0-1_amd64.deb`。若 Dockerfile 有变更，需先执行 `docker compose build builder`。
 

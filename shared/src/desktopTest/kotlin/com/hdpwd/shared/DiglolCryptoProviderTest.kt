@@ -53,4 +53,58 @@ class DiglolCryptoProviderTest {
             }
         }
     }
+
+    /**
+     * 必须与 Web libsodium crypto_pwhash(ARGON2ID13) + IETF XChaCha20-Poly1305 字节级一致，
+     * 否则 PC 导出的备份在浏览器里会提示恢复密码错误。
+     */
+    @Test
+    fun argon2idAndAeadMatchLibsodiumWebVectors() {
+        runBlocking {
+            val provider = platformCryptoProvider()
+            val salt = ByteArray(16) { it.toByte() }
+            val derived = provider.argon2id(
+                password = "test-password".encodeToByteArray(),
+                salt = salt,
+                parameters = KdfParameters(memoryKiB = 16, iterations = 1, parallelism = 1),
+            )
+            assertEquals(
+                "a6cf0bdb176032421ac106918f63d71cb0d8f80371ba81ab4fe8bbb77060cb8d",
+                derived.toHex(),
+            )
+            val nonce = ByteArray(24) { it.toByte() }
+            val ciphertext = provider.seal(
+                key = derived,
+                nonce = nonce,
+                plaintext = "payload".encodeToByteArray(),
+                aad = "header".encodeToByteArray(),
+            )
+            assertEquals(
+                "000102030405060708090a0b0c0d0e0f1011121314151617" +
+                    "36d5ef42de29e8ee814ab9bdc77e48a719b7876606c404",
+                ciphertext.toHex(),
+            )
+        }
+    }
+
+    /**
+     * Web hash-wasm Argon2d 必须与 Diglol Type.D 字节级一致。
+     */
+    @Test
+    fun argon2dMatchesHashWasmWebVector() {
+        runBlocking {
+            val derived = platformCryptoProvider().argon2d(
+                password = "test-password".encodeToByteArray(),
+                salt = ByteArray(16) { it.toByte() },
+                parameters = KdfParameters(memoryKiB = 16, iterations = 1, parallelism = 1),
+            )
+            assertEquals(
+                "21f8123d8ae4297e398c7c68f79406b9ddc48a13098a210c08975848533eef6a",
+                derived.toHex(),
+            )
+        }
+    }
+
+    private fun ByteArray.toHex(): String =
+        joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
 }

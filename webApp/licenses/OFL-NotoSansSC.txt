@@ -1,0 +1,9 @@
+Noto Sans SC (Subset OTF Regular)
+Copyright 2014-2021 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source'.
+Copyright 2015-2021 Google LLC.
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+This license is available with a FAQ at: https://openfontlicense.org
+
+Source: https://github.com/notofonts/noto-cjk
+File: Sans/SubsetOTF/SC/NotoSansSC-Regular.otf

@@ -1,14 +1,11 @@
 package com.hdpwd.shared.ui
 
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -16,8 +13,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 
@@ -39,17 +34,14 @@ fun SensitivePasswordField(
             visible = false
         }
     }
-    OutlinedTextField(
+    HdOutlinedTextField(
         value = value,
         onValueChange = onValueChange,
-        label = { Text(label) },
+        label = label,
         singleLine = true,
         enabled = enabled,
-        visualTransformation = if (visible) {
-            VisualTransformation.None
-        } else {
-            PasswordVisualTransformation()
-        },
+        isPassword = true,
+        passwordVisible = visible,
         trailingIcon = {
             IconButton(onClick = { visible = !visible }) {
                 Icon(
@@ -59,6 +51,6 @@ fun SensitivePasswordField(
                 )
             }
         },
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier,
     )
 }

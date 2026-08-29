@@ -15,7 +15,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -157,7 +156,7 @@ private fun CustomRgbPicker(
             blue = it
             publish(red, green, blue)
         }
-        OutlinedTextField(
+        HdOutlinedTextField(
             value = hexInput,
             onValueChange = { value ->
                 hexInput = value.uppercase()
@@ -169,7 +168,7 @@ private fun CustomRgbPicker(
                     onSelected(hexInput)
                 }
             },
-            label = { Text("自定义 HEX") },
+            label = "自定义 HEX",
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
             isError = !ColorRules.isValidHex(hexInput),

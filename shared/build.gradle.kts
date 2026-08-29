@@ -49,6 +49,7 @@ kotlin {
         }
         wasmJsMain.dependencies {
             implementation(npm("libsodium-wrappers-sumo", "0.8.4"))
+            implementation(npm("hash-wasm", "4.12.0"))
             implementation(libs.ktor.client.js)
         }
     }

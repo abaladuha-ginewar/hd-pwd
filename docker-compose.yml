@@ -81,7 +81,8 @@ services:
         NO_PROXY: ${DOCKER_BUILD_NO_PROXY:-localhost,127.0.0.1}
         GRADLE_OPTS: ${DOCKER_BUILD_GRADLE_OPTS:--Dhttp.proxyHost=http.docker.internal -Dhttp.proxyPort=3128 -Dhttps.proxyHost=http.docker.internal -Dhttps.proxyPort=3128}
     ports:
-      - "8080:8080"
+      # 明确绑 IPv4，避免 Docker Desktop/WSL2 只声明端口却不转发、或 localhost 走坏掉的 ::1 代理返回 404
+      - "127.0.0.1:8080:8080"
 
 volumes:
   gradle-cache:

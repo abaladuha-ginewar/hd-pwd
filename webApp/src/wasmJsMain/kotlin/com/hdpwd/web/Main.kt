@@ -14,6 +14,7 @@ import com.hdpwd.shared.security.UnavailableBiometricProvider
 import com.hdpwd.shared.storage.AtomicDirtyStateStore
 import com.hdpwd.shared.storage.LocalAppRepository
 import com.hdpwd.shared.storage.WasmLocalStorageByteStore
+import com.hdpwd.shared.platform.WasmBackupFilePort
 import com.hdpwd.shared.ui.PasswordManagerApp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -51,10 +52,14 @@ fun main() {
                 delay(400)
             }
         }
-        PasswordManagerApp(
-            repository = repository,
-            biometric = UnavailableBiometricProvider,
-            onPendingChangesChanged = { pendingChanges = it },
-        )
+        WithWebFont {
+            val backupPort = remember { WasmBackupFilePort() }
+            PasswordManagerApp(
+                repository = repository,
+                biometric = UnavailableBiometricProvider,
+                backupFiles = backupPort,
+                onPendingChangesChanged = { pendingChanges = it },
+            )
+        }
     }
 }
