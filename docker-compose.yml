@@ -71,6 +71,18 @@ services:
     volumes:
       - ./docker/s3/smoke.sh:/smoke.sh:ro
 
+  web:
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+      args:
+        HTTP_PROXY: ${DOCKER_BUILD_HTTP_PROXY:-http://http.docker.internal:3128}
+        HTTPS_PROXY: ${DOCKER_BUILD_HTTPS_PROXY:-http://http.docker.internal:3128}
+        NO_PROXY: ${DOCKER_BUILD_NO_PROXY:-localhost,127.0.0.1}
+        GRADLE_OPTS: ${DOCKER_BUILD_GRADLE_OPTS:--Dhttp.proxyHost=http.docker.internal -Dhttp.proxyPort=3128 -Dhttps.proxyHost=http.docker.internal -Dhttps.proxyPort=3128}
+    ports:
+      - "8080:8080"
+
 volumes:
   gradle-cache:
   silo-data:

@@ -1,5 +1,7 @@
 package com.hdpwd.shared.domain
 
+import kotlin.math.pow
+
 /**
  * 密码项 key 的跨平台约束。
  */
@@ -43,6 +45,44 @@ object ColorRules {
      */
     fun isValidHex(color: String): Boolean =
         color.matches(Regex("#[0-9A-Fa-f]{6}"))
+
+    /**
+     * 解析不透明 HEX 为 0–255 RGB；非法值返回 null。
+     */
+    fun parseRgb(hex: String): Triple<Int, Int, Int>? {
+        if (!isValidHex(hex)) return null
+        val value = hex.removePrefix("#").toInt(16)
+        return Triple((value shr 16) and 0xFF, (value shr 8) and 0xFF, value and 0xFF)
+    }
+}
+
+/**
+ * 按 WCAG 相对亮度选择深色或浅色前景，保证满色卡片文字可读。
+ */
+object ColorContrast {
+    /** 高于此亮度使用深色字，否则使用浅色字。 */
+    const val DARK_FOREGROUND_THRESHOLD = 0.179
+
+    /**
+     * sRGB 相对亮度，范围 0–1。
+     */
+    fun relativeLuminance(red: Int, green: Int, blue: Int): Double =
+        0.2126 * linearize(red) + 0.7152 * linearize(green) + 0.0722 * linearize(blue)
+
+    /**
+     * 背景足够亮时使用深色前景。
+     */
+    fun prefersDarkForeground(red: Int, green: Int, blue: Int): Boolean =
+        relativeLuminance(red, green, blue) >= DARK_FOREGROUND_THRESHOLD
+
+    private fun linearize(channel: Int): Double {
+        val srgb = channel.coerceIn(0, 255) / 255.0
+        return if (srgb <= 0.04045) {
+            srgb / 12.92
+        } else {
+            ((srgb + 0.055) / 1.055).pow(2.4)
+        }
+    }
 }
 
 /**

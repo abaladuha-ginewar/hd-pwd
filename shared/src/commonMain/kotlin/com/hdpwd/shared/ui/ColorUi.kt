@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -30,6 +29,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.hdpwd.shared.domain.ColorContrast
 import com.hdpwd.shared.domain.ColorRules
 import kotlin.math.roundToInt
 
@@ -37,12 +37,20 @@ import kotlin.math.roundToInt
  * 将不透明 RGB HEX 解析为 Compose Color；非法值回退为中性灰。
  */
 fun parseHexColor(hex: String): Color {
-    if (!ColorRules.isValidHex(hex)) return Color(0xFF94A3B8)
-    val value = hex.removePrefix("#").toLong(16)
-    val r = ((value shr 16) and 0xFF).toInt()
-    val g = ((value shr 8) and 0xFF).toInt()
-    val b = (value and 0xFF).toInt()
-    return Color(r, g, b)
+    val rgb = ColorRules.parseRgb(hex) ?: return Color(0xFF94A3B8)
+    return Color(rgb.first, rgb.second, rgb.third)
+}
+
+/**
+ * 根据背景相对亮度选择黑或白前景，供满色卡片使用。
+ */
+fun contrastContentColor(hex: String): Color {
+    val rgb = ColorRules.parseRgb(hex) ?: ColorRules.parseRgb("#94A3B8")!!
+    return if (ColorContrast.prefersDarkForeground(rgb.first, rgb.second, rgb.third)) {
+        Color.Black
+    } else {
+        Color.White
+    }
 }
 
 /**
@@ -188,25 +196,5 @@ private fun ChannelSlider(
             modifier = Modifier.weight(1f),
         )
         Text(value.toString().padStart(3, ' '), modifier = Modifier.width(36.dp))
-    }
-}
-
-/**
- * 带背景色的内容容器，用于卡片预览。
- */
-@Composable
-fun TintedSurface(
-    colorHex: String,
-    modifier: Modifier = Modifier,
-    content: @Composable () -> Unit,
-) {
-    val tint = parseHexColor(colorHex).copy(alpha = 0.28f)
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(12.dp))
-            .background(tint)
-            .padding(16.dp),
-    ) {
-        content()
     }
 }

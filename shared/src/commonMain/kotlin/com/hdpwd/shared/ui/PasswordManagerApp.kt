@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilterChip
@@ -1803,15 +1804,19 @@ private fun FolderCard(
         modifier = Modifier
             .fillMaxWidth()
             .combinedClickable(onClick = onOpen, onLongClick = onEdit),
+        colors = CardDefaults.cardColors(
+            containerColor = parseHexColor(folder.colorHex),
+            contentColor = contrastContentColor(folder.colorHex),
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
     ) {
-        TintedSurface(colorHex = folder.colorHex, modifier = Modifier.fillMaxWidth()) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Icon(Icons.Filled.Folder, contentDescription = null)
-                Text(folder.name, style = MaterialTheme.typography.titleMedium)
-            }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Icon(Icons.Filled.Folder, contentDescription = null)
+            Text(folder.name, style = MaterialTheme.typography.titleMedium)
         }
     }
 }
@@ -1838,68 +1843,76 @@ private fun PasswordEntryCard(
         }
     }
 
-    Card(modifier = Modifier.fillMaxWidth()) {
-        TintedSurface(colorHex = entry.colorHex, modifier = Modifier.fillMaxWidth()) {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .combinedClickable(
-                            onClick = {},
-                            onLongClick = onEdit,
-                        ),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Text(entry.title, style = MaterialTheme.typography.titleMedium)
-                    Text(entry.key, style = MaterialTheme.typography.labelSmall)
-                    folderPath?.takeIf { it.isNotBlank() }?.let {
-                        Text(it, style = MaterialTheme.typography.labelSmall)
-                    }
-                    Text(if (visible && revealed != null) revealed!! else "••••••••")
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = parseHexColor(entry.colorHex),
+            contentColor = contrastContentColor(entry.colorHex),
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .combinedClickable(
+                        onClick = {},
+                        onLongClick = onEdit,
+                    ),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(entry.title, style = MaterialTheme.typography.titleMedium)
+                Text(entry.key, style = MaterialTheme.typography.labelSmall)
+                folderPath?.takeIf { it.isNotBlank() }?.let {
+                    Text(it, style = MaterialTheme.typography.labelSmall)
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    IconButton(onClick = {
-                        if (visible) {
-                            visible = false
-                            revealed = null
-                        } else {
-                            scope.launch {
-                                val password = onRevealPassword()
-                                if (password != null) {
-                                    revealed = password
-                                    visible = true
-                                }
+                Text(if (visible && revealed != null) revealed!! else "••••••••")
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                IconButton(onClick = {
+                    if (visible) {
+                        visible = false
+                        revealed = null
+                    } else {
+                        scope.launch {
+                            val password = onRevealPassword()
+                            if (password != null) {
+                                revealed = password
+                                visible = true
                             }
                         }
-                    }) {
-                        Icon(
-                            imageVector = if (visible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
-                            contentDescription = if (visible) "隐藏密码" else "显示密码",
-                        )
                     }
-                    IconButton(onClick = onCopyPassword) {
-                        Icon(Icons.Filled.ContentCopy, contentDescription = "复制密码")
-                    }
-                    IconButton(onClick = {
-                        clipboardController?.copySensitive(
-                            PasswordGenerator.recipe(entry.key, entry.policy).encode(),
-                        )
-                    }) {
-                        Icon(Icons.Filled.Key, contentDescription = "复制恢复配方")
-                    }
+                }) {
+                    Icon(
+                        imageVector = if (visible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                        contentDescription = if (visible) "隐藏密码" else "显示密码",
+                    )
                 }
-                entry.labels.forEach { label ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text("${label.name}: ${label.value}", modifier = Modifier.weight(1f))
-                        IconButton(onClick = {
-                            clipboardController?.copySensitive(label.value)
-                        }) {
-                            Icon(Icons.Filled.ContentCopy, contentDescription = "复制标签值")
-                        }
+                IconButton(onClick = onCopyPassword) {
+                    Icon(Icons.Filled.ContentCopy, contentDescription = "复制密码")
+                }
+                IconButton(onClick = {
+                    clipboardController?.copySensitive(
+                        PasswordGenerator.recipe(entry.key, entry.policy).encode(),
+                    )
+                }) {
+                    Icon(Icons.Filled.Key, contentDescription = "复制恢复配方")
+                }
+            }
+            entry.labels.forEach { label ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("${label.name}: ${label.value}", modifier = Modifier.weight(1f))
+                    IconButton(onClick = {
+                        clipboardController?.copySensitive(label.value)
+                    }) {
+                        Icon(Icons.Filled.ContentCopy, contentDescription = "复制标签值")
                     }
                 }
             }

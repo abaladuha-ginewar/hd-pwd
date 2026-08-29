@@ -1,0 +1,15 @@
+.git
+.gradle
+**/.gradle
+**/build
+.idea
+*.iml
+local.properties
+.kotlin
+captures
+out
+androidApp/build
+desktopApp/build
+webApp/build
+shared/build
+openspec/changes/archive

@@ -4,7 +4,7 @@
 
 ## 功能概览
 
-- 本机多用户：独立恢复密码、本机主密码、可选生物识别（Android / Windows DPAPI），五分钟绝对授权会话
+- 本机多用户：独立恢复密码、本机主密码、可选生物识别（Android 强生物识别 / Windows Hello + DPAPI），五分钟绝对授权会话
 - V1 确定性密码生成与恢复配方；无 Vault 时仍可凭恢复密码与规则重建子密码
 - 加密 Vault：认证加密本地持久化（Android/Windows 私有文件；Web 使用 localStorage）
 - 三级目录、标签、颜色、递归搜索与响应式 Compose UI
@@ -26,6 +26,14 @@ docker compose run --rm builder :shared:desktopTest
 docker compose run --rm builder :desktopApp:packageDistributionForCurrentOS
 docker compose run --rm builder :webApp:wasmJsProductionExecutableCompileSync
 ```
+
+本机浏览器预览 Web（nginx 静态托管 Wasm，改代码后需重新构建镜像）：
+
+```text
+docker compose up --build web
+```
+
+浏览器打开 `http://localhost:8080`。Web 无生物识别，数据保存在该源的 localStorage。
 
 Linux 容器只能打包当前系统的 Desktop 发行包，产物为 DEB：`desktopApp/build/compose/binaries/main/deb/哈密_1.0.0-1_amd64.deb`。若 Dockerfile 有变更，需先执行 `docker compose build builder`。
 

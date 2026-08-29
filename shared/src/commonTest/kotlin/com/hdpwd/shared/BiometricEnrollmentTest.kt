@@ -61,7 +61,7 @@ class BiometricEnrollmentTest {
         assertFalse(
             DeviceUnlockPreference.shouldAutoPromptBiometric(
                 preferBiometric = true,
-                availability = BiometricAvailability.UNAVAILABLE,
+                availability = BiometricAvailability.NOT_ENROLLED,
                 hasSealedBlob = true,
             ),
         )
