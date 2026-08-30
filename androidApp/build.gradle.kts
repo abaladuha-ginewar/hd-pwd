@@ -72,11 +72,11 @@ android {
         }
     }
 
-    // 最终 APK 文件名：哈密-debug.apk / 哈密-release.apk
+    // 最终 APK 文件名：哈密-0.1.0-debug.apk / 哈密-0.1.0-release.apk
     applicationVariants.configureEach {
         outputs.configureEach {
             val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
-            output.outputFileName = "哈密-${buildType.name}.apk"
+            output.outputFileName = "哈密-${versionName}-${buildType.name}.apk"
         }
     }
 }
