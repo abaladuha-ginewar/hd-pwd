@@ -1,6 +1,8 @@
 .gradle/
 **/build/
 local.properties
+androidApp/release.keystore
+androidApp/keystore.properties
 .idea/
 *.iml
 out/
