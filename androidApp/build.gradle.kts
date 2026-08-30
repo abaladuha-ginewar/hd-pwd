@@ -34,8 +34,8 @@ android {
         applicationId = "com.hdpwd.android"
         minSdk = libs.versions.androidMinSdk.get().toInt()
         targetSdk = libs.versions.androidCompileSdk.get().toInt()
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = libs.versions.appVersionCode.get().toInt()
+        versionName = libs.versions.app.get()
     }
 
     buildFeatures {
@@ -72,7 +72,7 @@ android {
         }
     }
 
-    // 最终 APK 文件名：哈密-0.1.0-debug.apk / 哈密-0.1.0-release.apk
+    // 最终 APK 文件名：哈密-{versionName}-debug.apk / 哈密-{versionName}-release.apk
     applicationVariants.configureEach {
         outputs.configureEach {
             val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl

@@ -43,7 +43,7 @@ Android Debug 打包：
 docker compose run --rm android-builder
 ```
 
-产物路径示例：`androidApp/build/outputs/apk/debug/哈密-debug.apk`（可用 `adb install -r` 安装）。
+产物路径示例：`androidApp/build/outputs/apk/debug/哈密-1.0.0-debug.apk`（可用 `adb install -r` 安装）。
 
 ### Windows MSI
 

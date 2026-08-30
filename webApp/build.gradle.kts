@@ -1,3 +1,4 @@
+import org.gradle.api.tasks.Copy
 import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
 
 plugins {
@@ -32,4 +33,12 @@ kotlin {
 compose.resources {
     publicResClass = true
     packageOfResClass = "com.hdpwd.web.resources"
+}
+
+val appVersion = libs.versions.app.get()
+tasks.named<Copy>("wasmJsProcessResources") {
+    inputs.property("appVersion", appVersion)
+    filesMatching("index.html") {
+        filter { line -> line.replace("@@APP_VERSION@@", appVersion) }
+    }
 }

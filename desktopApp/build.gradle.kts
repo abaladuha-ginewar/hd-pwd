@@ -22,7 +22,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             packageName = "哈密"
-            packageVersion = "1.0.0"
+            packageVersion = libs.versions.app.get()
             description = "哈密密码管理器"
             copyright = "© 哈密"
             vendor = "哈密"
